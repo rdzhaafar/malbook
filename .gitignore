@@ -1,0 +1,16 @@
+# MacOS garbage
+.DS_Store
+
+# Malbook test files
+test
+.malbook
+*.zip
+
+# Python garbage
+venv
+__pycache__
+dist
+src/malbook.egg-info
+
+# VScode settings/breakpoints/garbage
+.vscode
