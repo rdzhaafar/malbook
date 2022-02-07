@@ -1,7 +1,9 @@
+from argparse import ArgumentParser
 import os
 from os import path, PathLike
+from pathlib import Path
 import subprocess as subp
-from typing import Callable, Any, NoReturn
+from typing import Callable, Any
 import sys
 import venv
 import shutil
@@ -9,7 +11,10 @@ import tempfile as temp
 
 
 _DOT_DIR = '.malbook'
-_BASE_PACKAGES = ['jupyter', 'malbook']
+# TODO: add `malbook` as requirement as soon as it gets uploaded 
+# to PyPi
+_BASE_PACKAGES = ['jupyter']
+_DEBUG = False
 
 
 class _Error(BaseException):
@@ -295,39 +300,13 @@ def _wrap(func: Callable[..., Any], *args) -> Any:
         sys.exit(1)
     except Exception as e:
         print(f'internal error: {e}')
-        print('Traceback:')
-
-        # TODO: This is for debugging only, remove
-        import traceback
-        print(traceback.format_exc())
-
+        # XXX: It's worth it to get full traceback for unexpected
+        # internal errors
+        if _DEBUG:
+            import traceback
+            print('Traceback:')
+            print(traceback.format_exc())
         sys.exit(2)
-
-
-def _usage(exit: int) -> NoReturn:
-    print(
-        f'usage: [global options] {sys.argv[0]} <command> [command options]\n\n'
-        'global options:\n'
-        '   -d/--dir                               specify malbook directory\n\n'
-        'commands:\n'
-        '   new [directory]                        creates a new empty notebook in `directory`.\n'
-        '                                          `directory` defaults to `.`\n'
-        '   dump-template [template-file]          creates a template from the current notebook\n'
-        '                                          `template-file` defaults to malbook.zip\n'
-        '   load-template <where> [template-file]  loads a notebook from a template\n'
-        '                                          `template-file` defaults to malbook.zip,\n'
-        '   run                                    runs the notebook\n'
-        '   stop                                   stops the running notebook\n'
-        '   install <packages...>                  installs Python package(s) to notebook virtual environment\n'
-        '   remove <packages...>                   removes Python package(s) from notebook virtual environment\n'
-        '   help                                   print this help message\n'
-    )
-    sys.exit(exit)
-
-
-def _args_error(err: str) -> NoReturn:
-    print(f'error: {err}')
-    _usage(1)
 
 
 def _main() -> None:
@@ -335,98 +314,149 @@ def _main() -> None:
     # incompatible
     _wrap(_check_compat)
 
-    # XXX: Parse command-line arguments
-    args = sys.argv[1:]
+    # XXX: Main parser and global options
+    parser = ArgumentParser(description='manage malbook notebooks')
+    parser.add_argument(
+        '-n', '--notebook',
+        type=Path,
+        default='.',
+        metavar='PATH',
+        help='run as if malbook was started in <PATH> instead of the current working directory'
+    )
+    parser.add_argument(
+        '-d', '--debug',
+        action='store_true',
+        help='enable debugging output'
+    )
+    commands = parser.add_subparsers(
+        help='command',
+        dest='command',
+        metavar='COMMAND',
+        required=True
+    )
 
-    # Parse optional `-d/--dir` option
-    root = '.'
-    explicit_root = False
-    if len(args) > 0 and (args[0] == '--dir' or args[0] == '-d'):
-        if len(args) < 2:
-            _args_error('-d requires a positional `dir` argument')
-        root = args[1]
-        args = args[2:]
-        explicit_root = True
+    # XXX: New
+    command_new = commands.add_parser(
+        'new',
+        help='create a new notebook'
+    )
+    command_new.add_argument(
+        '-d', '--directory',
+        type=Path,
+        default='.',
+        metavar='PATH',
+        help="create the notebook in <PATH>, creating <PATH> if it doesn't exist"
+    )
 
-    if len(args) == 0:
-        _args_error('No command supplied')
+    # XXX: Template subcommands
+    command_template = commands.add_parser(
+        'template',
+        help='manage malbook templates',
+    )
+    template_commands = command_template.add_subparsers(
+        dest='template_command',
+        help='template command',
+        metavar='COMMAND',
+        required=True
+    )
 
-    cmd = args[0]
-    args = args[1:]
+    # XXX: Template create
+    command_template_create = template_commands.add_parser(
+        'create',
+        help='create a new template',
+    )
+    command_template_create.add_argument(
+        'file',
+        type=Path,
+        metavar='FILE',
+        help='save template to <FILE>'
+    )
+
+    # XXX: Template load
+    command_template_load = template_commands.add_parser(
+        'load',
+        help='load a notebook from a template'
+    )
+    command_template_load.add_argument(
+        'file',
+        type=Path,
+        metavar='FILE',
+        help='template file to load the notebook from'
+    )
+    command_template_load.add_argument(
+        'where',
+        type=Path,
+        metavar='PATH',
+        help='create notebook in <PATH>'
+    )
+
+    # XXX: Run
+    command_run = commands.add_parser(
+        'run',
+        help='run jupyter notebook'
+    )
+
+    # XXX: Stop
+    command_stop = commands.add_parser(
+        'stop',
+        help='stop jupyter notebook'
+    )
+
+    # XXX: Install
+    command_install = commands.add_parser(
+        'install',
+        help='install a Python package to the notebook virtual environment'
+    )
+    command_install.add_argument(
+        'packages',
+        type=str,
+        nargs='*',
+        metavar='PACKAGES',
+        help='packages to install'
+    )
+
+    # XXX: Remove
+    command_remove = commands.add_parser(
+        'remove',
+        help='uninstall a Python package from the notebook virtual environment'
+    )
+
+
+    # XXX: Parse args
+    args = parser.parse_args()
+    if args.debug:
+        _DEBUG = True
 
     # XXX: Dispatch command
-    if cmd == 'new':
-        if explicit_root:
-            _args_error(f'-d/--dir option is ignored by `{cmd}`')
+    if args.command == 'new':
+        os.makedirs(args.directory, exist_ok=True)
+        _wrap(_new, args.directory)
 
-        if len(args) == 0:
-            _wrap(_new)
-        elif len(args) == 1:
-            # XXX: The directory must be created in case it doesn't
-            # already exist
-            root = args[0]
-            os.makedirs(root, exist_ok=True)
-            _wrap(_new, args[0])
-        else:
-            _args_error('Invalid usage')
+    elif args.command == 'template':
+        if args.template_command == 'create':
+            env = _wrap(_load, args.notebook)
+            _wrap(_dump_template, env, args.file)
 
-    elif cmd == 'dump-template':
-        env = _wrap(_load, root)
-        if len(args) == 0:
-            _wrap(_dump_template, env)
-        elif len(args) == 1:
-            _wrap(_dump_template, env, args[0])
-        else:
-            _args_error('Invalid usage')
+        elif args.template_command == 'load':
+            _wrap(_load_template, args.where, args.file)
 
-    elif cmd == 'load-template':
-        if explicit_root:
-            _args_error(f'-d/--dir option is ignored by `{cmd}`')
-        if len(args) == 1:
-            _wrap(_load_template, args[0])
-        elif len(args) == 2:
-            _wrap(_load_template, args[0], args[1])
-        else:
-            _args_error(f'Invalid options for `{cmd}`')
-
-    elif cmd == 'run' and len(args) == 0:
-        env = _wrap(_load, root)
+    elif args.command == 'run':
+        env = _wrap(_load, args.notebook)
         _wrap(_run, env)
 
-    elif cmd == 'stop' and len(args) == 0:
-        env = _wrap(_load, root)
+    elif args.command == 'stop':
+        env = _wrap(_load, args.notebook)
         _wrap(_stop, env)
 
-    elif cmd == 'install':
-        env = _wrap(_load, root)
-
-        if len(args) == 0:
-            _args_error('No packages specified')
-
-        for package in args:
-            print(f'installing {package}...')
+    elif args.command == 'install':
+        env = _wrap(_load, args.notebook)
+        for package in args.packages:
             _wrap(_install_pip_package, env, package)
 
-    elif cmd == 'remove':
-        env = _wrap(_load, root)
-
-        if len(args) == 0:
-            _args_error('No packages specified')
-
-        for package in args:
-            print(f'removing {package}...')
+    elif args.command == 'remove':
+        env = _wrap(_load, args.notebook)
+        for package in args.packages:
             _wrap(_remove_pip_package, env, package)
-
-    elif cmd == 'help' and len(args) == 0:
-        if explicit_root:
-            _args_error(f'-d/--dir option is ignored by `{cmd}`')
-        _usage(0)
-
-    else:
-        if cmd in ['new', 'dump-template', 'load-template', 'run', 'stop', 'install', 'remove', 'help']:
-            _args_error(f'Invalid options for `{cmd}`')
-        else:
-            _args_error(f'unknown command {cmd}')
 
 
 # XXX: Entry point
