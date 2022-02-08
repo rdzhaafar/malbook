@@ -5,6 +5,9 @@
 test
 .malbook
 *.zip
+src/__init__.py
+*.ipynb
+.ipynb_checkpoints
 
 # Python garbage
 venv
