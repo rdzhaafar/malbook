@@ -41,7 +41,7 @@ class _NotebookImpl(Notebook):
 
     def __init__(self, debug: bool, variables: Dict[str, Any]):
         self.debug = debug
-        self.current_pass = 'None'
+        self.current_task = 'None'
         self.variables = variables
 
     def log(self, msg: str) -> None:
@@ -67,7 +67,7 @@ class _NotebookImpl(Notebook):
 
     def start_task(self, name: str) -> None:
         self.log(f'Running task {name}...')
-        self.current_pass = name
+        self.current_task = name
 
 
 class _Task:
