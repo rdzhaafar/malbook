@@ -221,35 +221,42 @@ class _PipelineImpl(Pipeline):
             # TODO: Come up with a better error message
             raise Error('No root tasks defined')
 
-        # XXX: Assign highest possible order to root tasks
+        # XXX: Assign lowest possible order to root tasks
         order = 0
         for task in root:
             task.order = order
 
-        # XXX: Assign order to the rest of tasks
-        assigned = root
-        total_assigned = len(assigned)
-        while total_assigned < len(self.tasks):
-            order += 1
-            new = list()
-            for task in assigned:
-                dependents = graph.get_direct_dependents_of(task.name)
+        # XXX: Assign task execution orders
+        total_assigned = len(root)
+        while total_assigned != len(self.tasks):
+            for task in self.tasks:
+                if task.order != -1:
+                    continue
 
-                # XXX: Re-assign order if necessary
-                for dep in dependents:
-                    self.tasks_dict[dep].order = order
-                    new.append(self.tasks_dict[dep])
+                order = -1
+                seen_unassigned = False
+                for dependency_name in task.depends:
+                    dependency = self.tasks_dict[dependency_name]
+                    dependency_order = dependency.order
+                    if dependency_order == -1:
+                        seen_unassigned = True
+                    if dependency_order > order:
+                        order = dependency_order
 
-            assigned = new
-            total_assigned += len(new)
+                if not seen_unassigned:
+                    task.order = order + 1
+                    total_assigned += 1
 
         # XXX: Finally, sort the tasks by ascending order of execution
         self.tasks.sort(key=lambda x: x.order)
 
     def run(self) -> None:
         self.resolve_dependencies()
+        notebook = _NotebookImpl(self.debug, self.variables)
+
         for task in self.tasks:
-            print(task)
+            notebook.start_task(task.name)
+            task.func(notebook)
 
 
 def make_pipeline(debug: bool = False) -> Pipeline:
