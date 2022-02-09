@@ -11,9 +11,7 @@ import tempfile as temp
 
 
 _DOT_DIR = '.malbook'
-# TODO: add `malbook` as requirement as soon as it gets uploaded 
-# to PyPi
-_BASE_PACKAGES = ['jupyter']
+_BASE_PACKAGES = ['jupyter', 'malbook']
 _DEBUG = False
 
 
