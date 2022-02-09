@@ -9,6 +9,8 @@ import venv
 import shutil
 import tempfile as temp
 
+from . import __version__
+
 
 _DOT_DIR = '.malbook'
 _BASE_PACKAGES = ['jupyter', 'malbook']
@@ -419,6 +421,11 @@ def _main() -> None:
         help='uninstall a Python package from the notebook virtual environment'
     )
 
+    # XXX: Version
+    command_version = commands.add_parser(
+        'version',
+        help='print version string and exit'
+    )
 
     # XXX: Parse args
     args = parser.parse_args()
@@ -455,6 +462,9 @@ def _main() -> None:
         env = _wrap(_load, args.notebook)
         for package in args.packages:
             _wrap(_remove_pip_package, env, package)
+
+    elif args.command == 'version':
+        print(f'malbook {__version__}')
 
 
 # XXX: Entry point
