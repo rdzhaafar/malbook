@@ -460,4 +460,5 @@ def _main() -> None:
 
 
 # XXX: Entry point
-_main()
+if __name__ == '__main__':
+    _main()
