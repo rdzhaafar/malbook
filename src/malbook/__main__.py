@@ -13,7 +13,9 @@ from . import __version__
 
 
 _DOT_DIR = '.malbook'
-_BASE_PACKAGES = ['jupyter', 'malbook']
+_BASE_PACKAGES = ['jupyter']
+# XXX: Necessary for test builds only.
+_BASE_PACKAGES.append(os.getenv('MALBOOK_WHEEL_PATH', 'malbook'))
 _DEBUG = False
 
 
