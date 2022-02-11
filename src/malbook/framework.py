@@ -23,12 +23,44 @@ class Notebook:
 Callback = Callable[[Notebook], None]
 
 
+class Task:
+
+    name: str
+    depends: List[str]
+    _order: int
+
+    def __init__(self, name: str = '', depends: List[str] = list()):
+        if name == '':
+            self.name = self.__class__.__name__
+        else:
+            self.name = name
+        self.depends = depends
+        self._order = -1
+
+    def import_required_module(self, module: str, package: str) -> ModuleType:
+        try:
+            mod = import_module(module)
+            return mod
+        except ModuleNotFoundError:
+            raise Error(f'Module {module} required by task {self.name} could not be found.\n'\
+                        'You can resolve this issue by running\n'\
+                        f'\tmalbook install {package}')
+
+    def get_required_variable(self, key: str, notebook: Notebook) -> Any:
+        var = notebook.get(key)
+        if var is None:
+            raise Error(f'Variable {key} required by task {self.name} is not set')
+
+    def run(self, notebook: Notebook) -> None:
+        raise NotImplementedError(f"Task {self.name} doesn't implement Task.run()")
+
+
 class Pipeline:
 
     def define(self, key: str, value: Any) -> None:
         raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_task()")
 
-    def add_task(self, func: Callback, depends: List[str] = [], name: str = '') -> None:
+    def add_task(self, task: Task) -> None:
         raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_task()")
 
     def run(self) -> None:
@@ -43,15 +75,12 @@ class _NotebookImpl(Notebook):
 
     def __init__(self, debug: bool, variables: Dict[str, Any]):
         self.debug = debug
-        self.current_task = 'None'
+        self.current_task = ''
         self.variables = variables
 
     def log(self, msg: str) -> None:
         if self.debug:
-            prefix = '\x1b[31mDEBUG\x1b[0m: '
-            if self.current_task != '':
-                prefix += f'{self.current_task}: '
-            print(f'{prefix} {msg}')
+            print(f'\x1b[31mDebug\x1b[0m: {msg}')
 
     def print(self, markdown: str) -> None:
         display(Markdown(markdown))
@@ -68,24 +97,8 @@ class _NotebookImpl(Notebook):
         self.variables[key] = value
 
     def start_task(self, name: str) -> None:
-        self.log(f'Running task {name}...')
+        self.log(f'Running {name}...')
         self.current_task = name
-
-
-class _Task:
-    name: str
-    func: Callback
-    depends: List[str]
-    order: int
-
-    def __init__(self, func: Callback, depends: List[str], name: str = ''):
-        self.name = name if name != '' else func.__name__ 
-        self.func = func
-        self.depends = depends
-        self.order = -1
-
-    def __repr__(self) -> str:
-        return f'<{self.__class__.__name__}(name={self.name}, depends={self.depends}, order={self.order})>'
 
 
 class _NodeStack:
@@ -167,8 +180,8 @@ class _DependencyGraph:
 
 class _PipelineImpl(Pipeline):
 
-    tasks_dict: Dict[str, _Task]
-    tasks: List[_Task]
+    tasks_dict: Dict[str, Task]
+    tasks: List[Task]
     variables: Dict[str, Any]
     debug: bool
 
@@ -184,13 +197,11 @@ class _PipelineImpl(Pipeline):
 
         self.variables[key] = value
 
-    def add_task(self, func: Callback, depends: List[str] = [], name: str = '') -> None:
-        name = func.__name__ if name == '' else name
-        if name in self.tasks_dict:
-            raise Error(f'Task {name} is already defined')
+    def add_task(self, task: Task) -> None:
+        if task.name in self.tasks_dict:
+            raise Error(f'Task {task.name} is already defined')
 
-        task = _Task(func, depends, name)
-        self.tasks_dict[name] = task
+        self.tasks_dict[task.name] = task
         self.tasks.append(task)
 
     def resolve_dependencies(self) -> None:
@@ -226,31 +237,31 @@ class _PipelineImpl(Pipeline):
         # XXX: Assign lowest possible order to root tasks
         order = 0
         for task in root:
-            task.order = order
+            task._order = order
 
         # XXX: Assign task execution orders
         total_assigned = len(root)
         while total_assigned != len(self.tasks):
             for task in self.tasks:
-                if task.order != -1:
+                if task._order != -1:
                     continue
 
                 order = -1
                 seen_unassigned = False
                 for dependency_name in task.depends:
                     dependency = self.tasks_dict[dependency_name]
-                    dependency_order = dependency.order
+                    dependency_order = dependency._order
                     if dependency_order == -1:
                         seen_unassigned = True
                     if dependency_order > order:
                         order = dependency_order
 
                 if not seen_unassigned:
-                    task.order = order + 1
+                    task._order = order + 1
                     total_assigned += 1
 
         # XXX: Finally, sort the tasks by ascending order of execution
-        self.tasks.sort(key=lambda x: x.order)
+        self.tasks.sort(key=lambda x: x._order)
 
     def run(self) -> None:
         self.resolve_dependencies()
@@ -258,7 +269,14 @@ class _PipelineImpl(Pipeline):
 
         for task in self.tasks:
             notebook.start_task(task.name)
-            task.func(notebook)
+            try:
+                task.run(notebook)
+            except Exception as e:
+                notebook.print(f'\x1b[31mError\x1b[0m: {e}')
+                if self.debug:
+                    notebook.print('Traceback: ')
+                    import traceback
+                    traceback.format_exc()
 
 
 def make_pipeline(debug: bool = False) -> Pipeline:
