@@ -9,7 +9,9 @@ echo "Cleaning up running instances of malbook (if any)..."
 jupyter notebook stop -y
 
 if test -d test; then
-    rm -rf test
+    rm -rf test/.malbook
+else
+    mkdir test
 fi
 
 if test -d dist; then
@@ -22,8 +24,6 @@ python3 -m build
 
 export MALBOOK_WHEEL_PATH="$(pwd)/$(ls dist/*.whl)"
 
-echo "Creating test directory..."
-mkdir test
 cd test
 
 echo "Installing the build wheel..."
