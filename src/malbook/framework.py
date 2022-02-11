@@ -50,6 +50,7 @@ class Task:
         var = notebook.get(key)
         if var is None:
             raise Error(f'Variable {key} required by task {self.name} is not set')
+        return var
 
     def run(self, notebook: Notebook) -> None:
         raise NotImplementedError(f"Task {self.name} doesn't implement Task.run()")
