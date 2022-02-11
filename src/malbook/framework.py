@@ -1,5 +1,7 @@
 from typing import Callable, List, Optional, Dict, Any, Tuple
+from types import ModuleType
 from IPython.display import Markdown, display
+from importlib import import_module
 
 
 class Error(BaseException):
