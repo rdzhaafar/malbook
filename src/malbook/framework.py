@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Dict, Any, Tuple
+from typing import Callable, List, Optional, Dict, Any, Tuple, Type
 from types import ModuleType
 from IPython.display import Markdown, display
 from importlib import import_module
@@ -61,8 +61,11 @@ class Pipeline:
     def define(self, key: str, value: Any) -> None:
         raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_task()")
 
-    def add_task(self, task: Task) -> None:
+    def add_task(self, task: Type[Task]) -> None:
         raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_task()")
+
+    def add_tasks(self, tasks: List[Type[Task]]) -> None:
+        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_tasks()")
 
     def run(self) -> None:
        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.run()")
@@ -198,12 +201,17 @@ class _PipelineImpl(Pipeline):
 
         self.variables[key] = value
 
-    def add_task(self, task: Task) -> None:
-        if task.name in self.tasks_dict:
-            raise Error(f'Task {task.name} is already defined')
+    def add_task(self, task: Type[Task]) -> None:
+        task_inst = task()
+        name = task_inst.name
+        if name in self.tasks_dict:
+            raise Error(f'Task {name} is already defined')
+        self.tasks_dict[name] = task_inst
+        self.tasks.append(task_inst)
 
-        self.tasks_dict[task.name] = task
-        self.tasks.append(task)
+    def add_tasks(self, tasks: List[Type[Task]]) -> None:
+        for t in tasks:
+            self.add_task(t)
 
     def resolve_dependencies(self) -> None:
         # XXX: Check if all required dependencies exist
@@ -267,17 +275,9 @@ class _PipelineImpl(Pipeline):
     def run(self) -> None:
         self.resolve_dependencies()
         notebook = _NotebookImpl(self.debug, self.variables)
-
         for task in self.tasks:
             notebook.start_task(task.name)
-            try:
-                task.run(notebook)
-            except Exception as e:
-                notebook.print(f'\x1b[31mError\x1b[0m: {e}')
-                if self.debug:
-                    notebook.print('Traceback: ')
-                    import traceback
-                    traceback.format_exc()
+            task.run(notebook)
 
 
 def make_pipeline(debug: bool = False) -> Pipeline:
