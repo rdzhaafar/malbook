@@ -1,284 +1,270 @@
-from typing import Callable, List, Optional, Dict, Any, Tuple, Type
+from typing import List, Any, Optional, Type, Dict
 from types import ModuleType
-from IPython.display import Markdown, display
 from importlib import import_module
 
+from IPython.display import display_markdown
 
-class Error(BaseException):
-    pass
-
-
-class Notebook:
-
-    def print(self, markdown: str) -> None:
-        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Notebook.print()")
-
-    def get(self, key: str) -> Optional[Any]:
-        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Notebook.get()")
-
-    def set(self, key: str, value: Any) -> None:
-        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Notebook.set()")
+from .errors import *
+from .environment import Environment
 
 
-Callback = Callable[[Notebook], None]
+class _Notebook:
+
+    task_provided: List[str]
+    task_needed: List[str]
+
+    def __init__(self, variables, debug):
+        self.variables = variables
+        self._debug = debug
+        self.task = None
+
+    def debug(self, message):
+        if self._debug:
+            print(f"\x1b[31mDebug\x1b[0m: {message}")
+
+    def print(self, message):
+        display_markdown(message)
+
+    def set(self, variable, value):
+        if variable not in self.task_provided:
+            self.task_provided.append(variable)
+        if variable in self.variables:
+            self.debug(f"Overriding '{variable}'")
+        self.variables[variable] = value
+
+    def get(self, variable):
+        if variable not in self.task_needed:
+            self.task_needed.append(variable)
+        try:
+            return self.variables[variable]
+        except KeyError:
+            self.debug(f"'{variable}' is not defined")
+            return None
+
+    def start_task(self, task):
+        self.task = task
+        self.task_provided = list()
+        self.task_needed = list()
+        self.debug(f"Running {task.name}")
+
+    def finish_task(self):
+        if not self._debug:
+            return
+        for variable in self.task.provides:
+            if variable not in self.task_provided:
+                self.debug(
+                    f"Task {self.task.name} didn't provide '{variable}'")
+        for variable in self.task.needs:
+            if variable not in self.task_needed:
+                self.debug(f"Task {self.task.name} didn't need '{variable}'")
 
 
 class Task:
 
-    name: str
-    depends: List[str]
     _order: int
+    name: str
+    needs: List[str]
+    provides: List[str]
+    __notebook: _Notebook
+    required_packages: List[str]
 
-    def __init__(self, name: str = '', depends: List[str] = list()):
-        if name == '':
+    def __init__(self):
+        if not hasattr(self, 'name'):
             self.name = self.__class__.__name__
-        else:
-            self.name = name
-        self.depends = depends
+        if not hasattr(self, 'needs'):
+            self.needs = list()
+        if not hasattr(self, 'provides'):
+            self.provides = list()
+        if not hasattr(self, 'required_packages'):
+            self.required_packages = list()
+
+        self.__notebook = None
         self._order = -1
 
-    def import_required_module(self, module: str, package: str) -> ModuleType:
-        try:
-            mod = import_module(module)
-            return mod
-        except ModuleNotFoundError:
-            raise Error(f'Module {module} required by task {self.name} could not be found.\n'\
-                        'You can resolve this issue by running\n'\
-                        f'\tmalbook install {package}')
+    def print(self, message: str) -> None:
+        self.__notebook.print(message)
 
-    def get_required_variable(self, key: str, notebook: Notebook) -> Any:
-        var = notebook.get(key)
-        if var is None:
-            raise Error(f'Variable {key} required by task {self.name} is not set')
-        return var
+    def debug(self, message: str) -> None:
+        self.__notebook.debug(message)
 
-    def run(self, notebook: Notebook) -> None:
-        raise NotImplementedError(f"Task {self.name} doesn't implement Task.run()")
+    def get(self, variable: str) -> Optional[Any]:
+        return self.__notebook.get(variable)
+
+    def set(self, variable: str, value: Any) -> None:
+        self.__notebook.set(variable, value)
+
+    def _set_notebook(self, notebook) -> None:
+        self.__notebook = notebook
+
+    def import_module(self, name: str) -> ModuleType:
+        return import_module(name)
+
+    def __repr__(self) -> str:
+        class_ = self.__class__.__name__
+        return f"{class_}(needs={self.needs}, provides={self.provides}, "\
+               f"_order={self._order})"
 
 
 class Pipeline:
 
-    def define(self, key: str, value: Any) -> None:
-        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_task()")
-
-    def add_task(self, task: Type[Task]) -> None:
-        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_task()")
-
-    def add_tasks(self, tasks: List[Type[Task]]) -> None:
-        raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.add_tasks()")
-
-    def run(self) -> None:
-       raise NotImplementedError(f"{self.__class__.__name__} doesn't implement Pipeline.run()")
-
-
-class _NotebookImpl(Notebook):
-
-    current_task: str
-    variables: Dict[str, Any]
-    debug: bool
-
-    def __init__(self, debug: bool, variables: Dict[str, Any]):
-        self.debug = debug
-        self.current_task = ''
-        self.variables = variables
-
-    def log(self, msg: str) -> None:
-        if self.debug:
-            print(f'\x1b[31mDebug\x1b[0m: {msg}')
-
-    def print(self, markdown: str) -> None:
-        display(Markdown(markdown))
-
-    def get(self, key: str) -> Optional[Any]:
-        if key not in self.variables:
-            self.log(f'Variable {key} is not defined')
-            return None
-        return self.variables[key]
-
-    def set(self, key: str, value: Any) -> None:
-        if key in self.variables:
-            self.log(f'Overriding variable {key}')
-        self.variables[key] = value
-
-    def start_task(self, name: str) -> None:
-        self.log(f'Running {name}...')
-        self.current_task = name
-
-
-class _NodeStack:
-
-    stack: List[str]
+    __tasks: List[Task]
+    _variables: Dict[str, Any]
+    __environment: Environment
 
     def __init__(self):
-        self.stack = list()
+        self.__tasks = list()
+        self._variables = dict()
+        try:
+            self.__environment = Environment()
+        except:
+            self.__environment = None
 
-    def push(self, node: str) -> None:
-        self.stack.append(node)
+    def add(self, *tasks: List[Type[Task]]) -> None:
+        for task in tasks:
+            self.__tasks.append(task())
 
-    def pop(self) -> None:
-        self.stack = self.stack[:-1]
+    def define(self, variable: str, value: Any) -> None:
+        self._variables[variable] = value
 
-    def __contains__(self, node: str) -> bool:
-        return node in self.stack
+    def __install_all_required_packages(self, notebook):
+        if self.__environment is None:
+            notebook.debug("Can't find an environment to install packages to")
+            return
+
+        notebook.debug('Checking if any packages need to be installed')
+        for task in self.__tasks:
+            for req in task.required_packages:
+                if not self.__environment.package_is_installed(req):
+                    notebook.debug(
+                        f"Package {req} is not found. Installing...")
+                    self.__environment.install_pip_package(req)
+
+    def run(self, debug_output: bool = False) -> None:
+        # XXX: A 'root' task is just a wrapper around the
+        # pre-defined variables that has 0 dependencies
+        class RootTask(Task):
+            provides = [var for var in self._variables]
+        self.add(RootTask)
+
+        # XXX: Resolve the order of execution and sort
+        # tasks by that order
+        _resolve_execution_order(self.__tasks)
+        self.__tasks.sort(key=lambda x: x._order)
+
+        notebook = _Notebook(self._variables, debug_output)
+        self.__install_all_required_packages(notebook)
+
+        for task in self.__tasks:
+            if isinstance(task, RootTask):
+                continue
+            # FIXME: The whole '_set_notebook', 'start_task',
+            # and 'finish_task' dance is stupid. Figure out a
+            # better way track a task.
+            task._set_notebook(notebook)
+            notebook.start_task(task)
+            task.run()
+            notebook.finish_task()
 
 
-class _DependencyGraph:
+def _resolve_execution_order(tasks):
+    # XXX: Check if all needed variables are provided by other tasks
+    all_needed = list()
+    all_provided = list()
 
-    edges: List[Tuple[str, str]]
+    for task in tasks:
+        for variable in task.needs:
+            all_needed.append(
+                (task.name, variable)
+            )
+        for variable in task.provides:
+            all_provided.append(variable)
 
-    def __init__(self):
-        self.edges = list()
+    for (task_name, dependency) in all_needed:
+        if dependency not in all_provided:
+            raise DependencyError(f"Task {task_name} needs {dependency}, "
+                                  "but it's not defined or provided by any "
+                                  "other task")
 
-    def are_connected(self, src: str, dst: str) -> bool:
-        return (src, dst) in self.edges
+    # XXX: Helper functions for cycle detection algorithm
+    # XXX: get_dependents returns a list of tasks that need
+    #      some variable
 
-    def add_edge(self, src: str, dst: str) -> None:
-        if not self.are_connected(src, dst):
-            self.edges.append((src, dst))
-
-    def get_connected_nodes(self, root: str) -> List[str]:
-        nodes = []
-        for (src, dst) in self.edges:
-            if src == root:
-                nodes.append(dst)
-        return nodes
-
-    def get_direct_dependents_of(self, node: str) -> List[str]:
+    def get_dependents(variable):
         dependents = list()
-        for (src, dst) in self.edges:
-            if dst == node:
-                dependents.append(src)
+        for task in tasks:
+            if variable in task.needs:
+                dependents.append(task)
         return dependents
 
-    def has_cycles(self) -> bool:
-        # XXX: Recursive DFS search part of the algorithm
-        def _has_cycle_to_self(root: str, stack: _NodeStack = None) -> bool:
-            if stack is None:
-                stack = _NodeStack()
-            if root in stack:
+    # XXX: get_providers returns a list of tasks that provide a
+    #      variable
+    def get_providers(variable):
+        providers = list()
+        for task in tasks:
+            if variable in task.provides:
+                providers.append(task)
+        return providers
+
+    # XXX: This is only necessary because Python is neither
+    # pass by value nor pass by reference.
+    class Stack:
+        def __init__(self):
+            self.stack = list()
+
+        def push(self, item):
+            self.stack.append(item)
+
+        def pop(self):
+            self.stack = self.stack[:-1]
+
+        def __contains__(self, item):
+            return item in self.stack
+
+    # XXX: Recursive DFS part of cycle searching algorithm
+    def has_cycles_to_self(task, stack=None):
+        if stack is None:
+            stack = Stack()
+        if task in stack:
+            return True
+        stack.push(task)
+
+        dependents = list()
+        for variable in task.provides:
+            dependents.extend(get_dependents(variable))
+
+        for dependent in dependents:
+            if has_cycles_to_self(dependent, stack):
                 return True
-            nodes = self.get_connected_nodes(root)
-            stack.push(root)
-            for node in nodes:
-                if _has_cycle_to_self(node, stack):
-                    return True
-            stack.pop()
 
-            return False
-
-        # XXX: Non-recursive part
-        # XXX: Get all nodes in graph
-        nodes = []
-        for (src, dst) in self.edges:
-            if src not in nodes:
-                nodes.append(src)
-            if dst not in nodes:
-                nodes.append(dst)
-
-        # XXX: Run DFS on all nodes to determine if there are cycles
-        for node in nodes:
-            if _has_cycle_to_self(node):
-                return True
+        stack.pop()
         return False
 
+    # XXX: Detect cycles
+    for task in tasks:
+        if has_cycles_to_self(task):
+            raise DependencyError('Dependency cycle detected in tasks')
 
-class _PipelineImpl(Pipeline):
+    # XXX: Helper functions for execution order assignment algorithm
 
-    tasks_dict: Dict[str, Task]
-    tasks: List[Task]
-    variables: Dict[str, Any]
-    debug: bool
+    # XXX: Assign execution orders
+    assigned = 0
+    for task in tasks:
+        if len(task.needs) == 0:
+            task._order = 0
+            assigned += 1
 
-    def __init__(self, debug: bool):
-        self.tasks = list()
-        self.variables = dict()
-        self.tasks_dict = dict()
-        self.debug = debug
+    while assigned != len(tasks):
+        for task in tasks:
+            if task._order != -1:
+                continue
 
-    def define(self, key: str, value: Any) -> None:
-        if key in self.variables:
-            raise Error(f'Variable {key} is already defined')
+            high_order = -1
+            for dependency in task.needs:
+                providers = get_providers(dependency)
+                low_order = min(providers, key=lambda x: x._order)._order
+                if low_order > high_order:
+                    high_order = low_order
 
-        self.variables[key] = value
-
-    def add_task(self, task: Type[Task]) -> None:
-        task_inst = task()
-        name = task_inst.name
-        if name in self.tasks_dict:
-            raise Error(f'Task {name} is already defined')
-        self.tasks_dict[name] = task_inst
-        self.tasks.append(task_inst)
-
-    def add_tasks(self, tasks: List[Type[Task]]) -> None:
-        for t in tasks:
-            self.add_task(t)
-
-    def resolve_dependencies(self) -> None:
-        # XXX: Check if all required dependencies exist
-        for task in self.tasks:
-            for dep in task.depends:
-                if dep not in self.tasks_dict:
-                    raise Error(f'Dependency {dep} required by {task.name} is not defined')
-
-        # XXX: Build dependency graph
-        graph = _DependencyGraph()
-        for task in self.tasks:
-            for dep in task.depends:
-                graph.add_edge(task.name, dep)
-
-        # XXX: Check for dependency cycles
-        if graph.has_cycles():
-            # TODO: Come up with a better error message
-            raise Error('Dependency cycles detected in tasks')
-
-        # XXX: Get root tasks (tasks without dependencies)
-        root = []
-        for task in self.tasks:
-            if len(task.depends) == 0:
-                root.append(task)
-
-        # XXX: If there are no root tasks, then there is nothing that we
-        # can run first
-        if len(root) == 0:
-            # TODO: Come up with a better error message
-            raise Error('No root tasks defined')
-
-        # XXX: Assign lowest possible order to root tasks
-        order = 0
-        for task in root:
-            task._order = order
-
-        # XXX: Assign task execution orders
-        total_assigned = len(root)
-        while total_assigned != len(self.tasks):
-            for task in self.tasks:
-                if task._order != -1:
-                    continue
-
-                order = -1
-                seen_unassigned = False
-                for dependency_name in task.depends:
-                    dependency = self.tasks_dict[dependency_name]
-                    dependency_order = dependency._order
-                    if dependency_order == -1:
-                        seen_unassigned = True
-                    if dependency_order > order:
-                        order = dependency_order
-
-                if not seen_unassigned:
-                    task._order = order + 1
-                    total_assigned += 1
-
-        # XXX: Finally, sort the tasks by ascending order of execution
-        self.tasks.sort(key=lambda x: x._order)
-
-    def run(self) -> None:
-        self.resolve_dependencies()
-        notebook = _NotebookImpl(self.debug, self.variables)
-        for task in self.tasks:
-            notebook.start_task(task.name)
-            task.run(notebook)
-
-
-def make_pipeline(debug: bool = False) -> Pipeline:
-    return _PipelineImpl(debug)
+            if high_order != -1:
+                task._order = high_order + 1
+                assigned += 1
