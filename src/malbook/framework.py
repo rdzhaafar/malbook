@@ -2,7 +2,7 @@ from typing import List, Any, Optional, Type, Dict
 from types import ModuleType
 from importlib import import_module
 
-from IPython.display import display_markdown
+from IPython.display import display_markdown, Markdown
 
 from .errors import *
 from .environment import Environment
@@ -23,7 +23,8 @@ class _Notebook:
             print(f"\x1b[31mDebug\x1b[0m: {message}")
 
     def print(self, message):
-        display_markdown(message)
+        md = Markdown(message)
+        display_markdown(md)
 
     def set(self, variable, value):
         if variable not in self.task_provided:
