@@ -7,6 +7,10 @@ echo "WARNING: This script will release the repository to PyPi as-is, meaning"
 echo "that any bugs or unwanted details will end up in public."
 read -p "Are you sure you want to proceed? (Y/n) " -r
 if [[ $REPLY =~ ^[Yy]$ ]]; then
+
+    # Delete the old build
+    test -d dist && rm -rf dist
+
     echo "Bumping the version number"
     bumpversion patch
     echo "Pushing changes to GitHub..."
