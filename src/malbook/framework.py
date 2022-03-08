@@ -3,9 +3,44 @@ from types import ModuleType
 from importlib import import_module
 
 from IPython.display import display_markdown, Markdown
+import IPython.display as display
 
 from .errors import *
 from .environment import Environment
+
+
+def safe_import(module: str, package: str = None, environment: Environment = None) -> ModuleType:
+    '''
+    Imports a module into the current namespace, installing the
+    providing package in case it's not already installed.
+
+    Parameters:
+        module (str): name of the module
+        package (str): name of providing pip package
+        environment (malbook.Environment): malbook virtual environment
+
+    Returns:
+        the imported module
+    '''
+    if package is None:
+        package = module
+
+    if environment is None:
+        environment = Environment()
+
+    if environment.package_is_installed(package):
+        environment.install_pip_package(package)
+
+    return import_module(module)
+
+
+def output(text: str, kind: str = 'markdown'):
+    if kind == 'markdown':
+        display.display_markdown(display.Markdown(text))
+    elif kind == 'html':
+        display.display_markdown(display.HTML(text))
+    else:
+        raise Error(f"'{kind}' is not a known output kind")
 
 
 class _Notebook:
