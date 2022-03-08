@@ -120,30 +120,48 @@ def _main() -> None:
         help='stop jupyter notebook'
     )
 
-    # XXX: Install
-    command_install = commands.add_parser(
-        'install',
-        help='install a Python package to the notebook virtual environment'
+    # Package commands
+    command_package = commands.add_parser(
+        'package',
+        help='manage pip packages'
     )
-    command_install.add_argument(
-        'packages',
-        type=str,
-        nargs='*',
-        metavar='PACKAGES',
-        help='packages to install'
+    package_commands = command_package.add_subparsers(
+        dest='package_command',
+        help='package command',
+        metavar='COMMAND',
+        required=True
     )
 
-    # XXX: Remove
-    command_remove = commands.add_parser(
-        'remove',
-        help='uninstall a Python package from the notebook virtual environment'
+    # Package install
+    command_package_install = package_commands.add_parser(
+        'install',
+        help='install a pip package'
     )
-    command_remove.add_argument(
+    command_package_install.add_argument(
         'packages',
         type=str,
         nargs='*',
         metavar='PACKAGES',
-        help='packages to remove'
+        help='pip packages'
+    )
+
+    # Package remove
+    command_package_remove = package_commands.add_parser(
+        'remove',
+        help='remove a pip package'
+    )
+    command_package_remove.add_argument(
+        'packages',
+        type=str,
+        nargs='*',
+        metavar='PACKAGES',
+        help='pip packages'
+    )
+
+    # Package list
+    command_package_list = package_commands.add_parser(
+        'list',
+        help='list installed pip packages'
     )
 
     # XXX: Version
@@ -169,6 +187,23 @@ def _main() -> None:
         elif args.template_command == 'load':
             _wrap(load_from_template, args.file, args.where)
 
+    elif args.command == 'package':
+        env = _wrap(Environment, args.notebook)
+
+        if args.package_command == 'install':
+            for package in args.packages:
+                print(f'installing {package}')
+                _wrap(env.install_pip_package, package)
+
+        elif args.package_command == 'remove':
+            for package in args.packages:
+                print(f'removing {package}')
+                _wrap(env.remove_pip_package, package)
+
+        elif args.package_command == 'list':
+            packages = _wrap(env.list_installed_pip_packages)
+            print(packages)
+
     elif args.command == 'run':
         env = _wrap(Environment, args.notebook)
         _wrap(env.run_jupyter_notebook)
@@ -176,16 +211,6 @@ def _main() -> None:
     elif args.command == 'stop':
         env = _wrap(Environment, args.notebook)
         _wrap(env.stop_jupyter_notebook)
-
-    elif args.command == 'install':
-        env = _wrap(Environment, args.notebook)
-        for package in args.packages:
-            _wrap(env.install_pip_package, package)
-
-    elif args.command == 'remove':
-        env = _wrap(Environment, args.notebook)
-        for package in args.packages:
-            _wrap(env.remove_pip_package, package)
 
     elif args.command == 'version':
         print(f'malbook version {__version__}')
