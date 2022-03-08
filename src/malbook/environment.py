@@ -128,6 +128,18 @@ class Environment:
         cmd = f"pip freeze > {self.packages_file}"
         self._wrap_cmd(cmd)
 
+    def list_installed_pip_packages(self) -> str:
+        cmd = 'pip freeze'
+        out = self._run_in_venv(cmd)
+
+        code = out.returncode
+
+        if code != 0:
+            raise CommandError(
+                f'Command failed with return code {code}', out.stderr.decode('utf-8'))
+
+        return out.stdout.decode('utf-8')
+
     def _install_pip_package(self, package, installing_requirements=False):
         if package in _BASE_PACKAGES and not installing_requirements:
             raise Error(f"Base package {package} is already installed")
