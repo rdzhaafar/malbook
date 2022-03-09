@@ -192,12 +192,12 @@ def _main() -> None:
 
         if args.package_command == 'install':
             for package in args.packages:
-                print(f'installing {package}')
+                print(f'Installing {package}...')
                 _wrap(env.install_pip_package, package)
 
         elif args.package_command == 'remove':
             for package in args.packages:
-                print(f'removing {package}')
+                print(f'Removing {package}...')
                 _wrap(env.remove_pip_package, package)
 
         elif args.package_command == 'list':
@@ -213,7 +213,7 @@ def _main() -> None:
         _wrap(env.stop_jupyter_notebook)
 
     elif args.command == 'version':
-        print(f'malbook version {__version__}')
+        print(f'{__version__}')
 
 
 if __name__ == '__main__':
