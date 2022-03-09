@@ -1,3 +1,4 @@
+from os import environ
 from typing import List, Any, Optional, Type, Dict
 from types import ModuleType
 from importlib import import_module
@@ -7,6 +8,14 @@ import IPython.display as display
 
 from .errors import *
 from .environment import Environment
+
+
+def ensure_package(package: str, environment: Environment = None) -> None:
+    if environment is None:
+        environment = Environment()
+
+    if not environment.package_is_installed(package):
+        environment.install_pip_package(package)
 
 
 def safe_import(module: str, package: str = None, environment: Environment = None) -> ModuleType:
@@ -28,8 +37,7 @@ def safe_import(module: str, package: str = None, environment: Environment = Non
     if environment is None:
         environment = Environment()
 
-    if not environment.package_is_installed(package):
-        environment.install_pip_package(package)
+    ensure_package(package, environment)
 
     return import_module(module)
 
