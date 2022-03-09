@@ -177,6 +177,16 @@ class Environment:
         if path.exists(canonical):
             raise Error(f"File {canonical} already exists")
 
+        ignore_file = path.join(self.root, '.ignore')
+
+        # XXX: Ignore the malbook hidden folder by default
+        ignore = ['.malbook']
+        if path.exists(ignore_file):
+            with open(ignore_file, 'rt') as f:
+                text = f.read()
+                for i in text.split('\n'):
+                    ignore.append(i)
+
         # XXX: Strip the '.zip' ending, because shutil.make_archive
         # adds it automatically.
         canonical = canonical[:-4]
@@ -187,9 +197,10 @@ class Environment:
 
             root = path.join(td, 'files')
             os.mkdir(root)
+
             for dirent in os.listdir(self.root):
-                # XXX: Skip the virtual environment
-                if dirent == '.malbook':
+                # XXX: Check if entry should be ignored
+                if dirent in ignore:
                     continue
 
                 src = path.join(self.root, dirent)
