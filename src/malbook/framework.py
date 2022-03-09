@@ -28,7 +28,7 @@ def safe_import(module: str, package: str = None, environment: Environment = Non
     if environment is None:
         environment = Environment()
 
-    if environment.package_is_installed(package):
+    if not environment.package_is_installed(package):
         environment.install_pip_package(package)
 
     return import_module(module)
@@ -38,7 +38,7 @@ def output(text: str, kind: str = 'markdown'):
     if kind == 'markdown':
         display.display_markdown(display.Markdown(text))
     elif kind == 'html':
-        display.display_markdown(display.HTML(text))
+        display.display_html(display.HTML(text))
     else:
         raise Error(f"'{kind}' is not a known output kind")
 
