@@ -90,12 +90,12 @@ class Environment:
         # XXX: MacOS, Linux
         if self.is_posix():
             virtualenv_script = path.join(self.virtualenv, 'bin', 'activate')
+            self.virtualenv_activate = f'source {virtualenv_script}; '
         # XXX: Windows
         else:
             virtualenv_script = path.join(
                 self.virtualenv, 'Scripts', 'Activate.ps1')
-
-        self.virtualenv_activate = f'{virtualenv_script}; '
+            self.virtualenv_activate = f'{virtualenv_script}; '
 
     def is_posix(self) -> bool:
         return self.os_name == 'posix'
