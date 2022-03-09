@@ -42,7 +42,7 @@ def safe_import(module: str, package: str = None, environment: Environment = Non
     return import_module(module)
 
 
-def output(text: str, kind: str = 'markdown'):
+def output(text: str, kind: str = 'html'):
     if kind == 'markdown':
         display.display_markdown(display.Markdown(text))
     elif kind == 'html':
