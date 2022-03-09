@@ -103,7 +103,9 @@ class Environment:
     def is_windows(self) -> bool:
         return self.os_name == 'nt'
 
-    def _run_in_venv(self, cmd) -> subp.CompletedProcess[bytes]:
+    # XXX: The internal version captures and returns process output, whilst the
+    # public version redirects STDOUT/STDERR to their respective fds.
+    def _run_command_in_venv(self, cmd) -> subp.CompletedProcess[bytes]:
         virtualenv_cmd = self.virtualenv_activate + cmd
         if self.is_posix():
             # XXX: MacOS, Linux
@@ -115,8 +117,19 @@ class Environment:
                            check=False, capture_output=True)
         return out
 
+    # XXX: See the note for the internal version
+    def run_command_in_venv(self, cmd: str):
+        virtualenv_cmd = self.virtualenv_activate + cmd
+
+        if self.is_posix():
+            # XXX: MacOS, Linux
+            _ = subp.run(['sh', '-c', virtualenv_cmd])
+        else:
+            # XXX: Windows
+            _ = subp.run(['powershell', virtualenv_cmd])
+
     def _wrap_cmd(self, cmd):
-        out = self._run_in_venv(cmd)
+        out = self._run_command_in_venv(cmd)
         code = out.returncode
         if code != 0:
             raise CommandError(
@@ -130,7 +143,7 @@ class Environment:
 
     def list_installed_pip_packages(self) -> str:
         cmd = 'pip freeze'
-        out = self._run_in_venv(cmd)
+        out = self._run_command_in_venv(cmd)
 
         code = out.returncode
 
@@ -152,7 +165,7 @@ class Environment:
         # XXX: `pip show` returns 1 if package is not installed
         package = _strip_pip_version_info(package)
         cmd = f"pip show {package}"
-        out = self._run_in_venv(cmd)
+        out = self._run_command_in_venv(cmd)
         if out.returncode == 0:
             return True
         return False

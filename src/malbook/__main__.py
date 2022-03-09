@@ -170,6 +170,18 @@ def _main() -> None:
         help='print version string and exit'
     )
 
+    # XXX: Cmd
+    command_cmd = commands.add_parser(
+        'cmd',
+        help='run a command inside malbook virtual environment'
+    )
+    command_cmd.add_argument(
+        'cmd_command',
+        metavar='CMD',
+        help='command to run',
+        type=str,
+    )
+
     # XXX: Parse args
     args = parser.parse_args()
     _DEBUG_MODE = args.debug
@@ -215,6 +227,10 @@ def _main() -> None:
     elif args.command == 'version':
         print(f'{__version__}')
 
+    elif args.command == 'cmd':
+        env: Environment = _wrap(Environment, args.notebook)
+        cmd = args.cmd_command
+        env.run_command_in_venv(cmd)
 
 if __name__ == '__main__':
     _main()
