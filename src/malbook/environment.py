@@ -10,7 +10,7 @@ import shutil
 from .errors import *
 
 
-_BASE_PACKAGES = ['jupyter']
+_BASE_PACKAGES = []
 # XXX: This is necessary for testing dev builds only.
 # `test.sh` script exports `MALBOOK_WHEEL_PATH`, which is set
 # to the freshly built malbook wheel path. This way, we install
