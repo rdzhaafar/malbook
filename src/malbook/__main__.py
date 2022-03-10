@@ -9,9 +9,6 @@ from .environment import *
 from .errors import *
 
 
-_DEBUG_MODE = False
-
-
 def _wrap(func: Callable[..., Any], *args, **kwargs) -> Any:
     try:
         return func(*args, **kwargs)
@@ -20,10 +17,6 @@ def _wrap(func: Callable[..., Any], *args, **kwargs) -> Any:
         sys.exit(1)
     except Exception as e:
         print(f"error: internal: {e}")
-        if _DEBUG_MODE:
-            import traceback
-            print('traceback:')
-            print(traceback.format_exc())
         sys.exit(2)
 
 
@@ -41,11 +34,7 @@ def _main() -> None:
         metavar='PATH',
         help='run as if malbook was started in <PATH> instead of the current working directory'
     )
-    parser.add_argument(
-        '-d', '--debug',
-        action='store_true',
-        help='enable debugging output'
-    )
+
     commands = parser.add_subparsers(
         help='command',
         dest='command',
@@ -184,7 +173,6 @@ def _main() -> None:
 
     # XXX: Parse args
     args = parser.parse_args()
-    _DEBUG_MODE = args.debug
 
     # XXX: Dispatch command
     if args.command == 'new':
