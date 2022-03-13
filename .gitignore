@@ -1,19 +1,14 @@
-# MacOS garbage
+# macOS garbage
 .DS_Store
 
 # Malbook test files
 test
-.malbook
-*.zip
-src/__init__.py
-*.ipynb
-.ipynb_checkpoints
 
-# Python garbage
+# Python build garbage
 venv
-__pycache__
 dist
 src/malbook.egg-info
+build
 
-# VScode settings/breakpoints/garbage
+# VScode garbage
 .vscode
