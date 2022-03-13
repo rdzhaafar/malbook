@@ -1,21 +1,80 @@
-# `malbook` - A Jupyter notebooks framework for automated malware analysis
+## About
 
-`malbook` is command line utility and a python module that helps automate 
-static analysis of malware samples.
-
-## Requirements
-
-- python >= 3.9
-- setuptools >= 52
+malbook is a utility that aims to make it easy to create and reuse Jupyter
+notebook scripts.
 
 ## Installation
 
-You can install malbook using `pip` with the following command
-```powershell
-python -m pip install malbook
-```
-on Windows, or
+Install malbook using pip
 ```sh
-python3 -m pip install malbook
+$ pip install malbook
 ```
-On Linux and MacOS.
+
+## Quickstart
+
+Let's create a Jupyter notebook that will print the import
+table of the [FLOSS](https://github.com/mandiant/flare-floss) Windows executable. First, create a new
+notebook
+
+```sh
+$ mkdir Demo
+$ cd Demo
+$ malbook new
+```
+
+You can now launch the freshly created notebook
+
+```sh
+$ malbook run
+```
+
+Let's now download and unzip the FLOSS executable
+
+```sh
+$ wget https://github.com/mandiant/flare-floss/releases/download/v1.7.0/floss-v1.7.0-windows.zip
+$ unzip floss-v1.7.0-windows.zip
+$ rm floss-v1.7.0-windows.zip
+```
+
+We will extract the import table using [pefile](https://github.com/erocarrera/pefile). Since this package is not installed by default, we can use a special utility function to
+import it into the script
+
+```python
+import malbook
+pefile = malbook.safe_import('pefile')
+```
+
+`safe_import()` will ensure that package gets installed into the virtual environment
+before the module is imported. We can now print the import table
+
+```python
+pe = pefile.PE('floss.exe')
+
+for entry in pe.DIRECTORY_ENTRY_IMPORT:
+    for imp in entry.imports:
+        print(imp.name.decode())
+```
+
+![](./images/demo.png)
+
+After we make sure that our script works, we can distribute it to other people.
+This is done by creating a malbook template, which encompasses all the files inside
+the folder along with all the dependencies needed by the script.
+
+```sh
+$ malbook template create Demo.zip
+```
+
+which will create a file `Demo.zip`, which can be shared with others.
+Loading the template is done like so:
+
+```sh
+$ malbook template load Demo.zip LoadedDemo
+```
+
+When the template is loaded, the notebook can be launched the same way as before
+
+```sh
+$ cd LoadedDemo
+$ malbook run
+```
