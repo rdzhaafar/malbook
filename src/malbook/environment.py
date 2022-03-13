@@ -49,21 +49,6 @@ def check_compat() -> None:
             "https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-executionpolicy")
 
 
-def _strip_pip_version_info(package):
-    # XXX: Extract a package name from a string
-    # that also specifies version (e.g. jupyter==1.0.0)
-    eq = package.split('==')
-    if len(eq) != 1:
-        return eq[0]
-    me = package.split('>=')
-    if len(me) != 1:
-        return me[0]
-    le = package.split('<=')
-    if len(le) != 1:
-        return le[0]
-    return package
-
-
 class Environment:
 
     root: Path
@@ -162,12 +147,11 @@ class Environment:
         self._dump_package_list()
 
     def package_is_installed(self, package: str) -> bool:
-        # XXX: `pip show` returns 1 if package is not installed
-        package = _strip_pip_version_info(package)
-        cmd = f"pip show {package}"
-        out = self._run_command_in_venv(cmd)
-        if out.returncode == 0:
-            return True
+        with open(self.packages_file, 'rt') as f:
+            packages = f.read()
+        for p in packages:
+            if package in p:
+                return True
         return False
 
     def install_pip_package(self, package: str) -> None:
