@@ -9,14 +9,14 @@ if [ ! -d ".git" ]; then
     echo "'$0' must be run from the root repository dir"
     exit 1
 fi
-if [ ! -f "~/.pypirc" ]; then
+if [ ! -f ~/.pypirc ]; then
     echo "'.pypirc' is not configured"
     exit 1
 fi
 
 read -p "Are you absolutely sure? (Y/n) " -r
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    cd malbook
+    cd Malbook
     if [ -d dist ]; then
         rm -rf dist
     fi

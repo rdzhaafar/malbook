@@ -12,17 +12,17 @@ fi
 
 echo "Cleaning up..."
 jupyter notebook stop -y
-if [ -d malbook/test ]; then
-    rm -rf malbook/test/.malbook
+if [ -d Malbook/test ]; then
+    rm -rf Malbook/test/.malbook
 else
-    mkdir malbook/test
+    mkdir Malbook/test
 fi
-if [ -d malbook/dist ]; then
-    rm -rf malbook/dist
+if [ -d Malbook/dist ]; then
+    rm -rf Malbook/dist
 fi
 
 echo "Building malbook..."
-cd malbook
+cd Malbook
 python3 -m build
 export MALBOOK_WHEEL_PATH="$(pwd)/$(ls dist/*.whl)"
 
