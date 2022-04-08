@@ -16,6 +16,10 @@ import functools
 
 import malbook
 
+# XXX: Virtualbox control code is so massive that 
+# it gets its own module
+import vbox
+
 # XXX: StringSifter breaks with LightGBM 3.3.2
 # LightGBM needs to be installed first to ensure that
 # version gets locked at 3.1.0
@@ -122,14 +126,16 @@ class Config:
     yara_rules: Path = path.join(_CWD, 'yara')
     yara_ignore: List[str] = []
 
-    packer_peid: bool = True
-    packer_section: bool = True
+    packer: bool = True
 
     imports: bool = True
     imports_malapi: bool = True
 
     compare: bool = False
     compare_to: List[Path] = []
+
+    virtualbox_procmon: bool = False
+    virtualbox_vm_name: Optional[str] = None
 
     cache: bool = True
 
@@ -177,11 +183,8 @@ def _scan(sample: Path, config: Config, cache: _Cache):
     if config.yara:
         _yara(data, config, cache)
 
-    if config.packer_peid:
+    if config.packer:
         _peid(sample, config, cache)
-
-    if config.packer_section:
-        _packers(pe, config, cache)
 
     if config.imports:
         _imports(pe, config, cache)
@@ -301,10 +304,6 @@ def _bazaar(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
     _ul(lis, n)
 
 
-def _fraudguard(data):
-    api = 'https://docs.fraudguard.io/'
-
-
 def _pe(data):
     try:
         pe = pefile.PE(data=data)
@@ -330,107 +329,6 @@ def _unzip(zip_path, config):
         z.extractall(zip_out, pwd=config.unzip_password)
 
     return zip_out
-
-def _packers(pe: pefile.PE, config: Config, cache: _Cache):
-    packers = {
-        '.aspack': 'Aspack packer',
-        '.adata': 'Aspack packer/Armadillo packer',
-        'ASPack': 'Aspack packer',
-        '.ASPack': 'ASPAck Protector',
-        '.boom': 'The Boomerang List Builder (config+exe xored with a single byte key 0x77)',
-        '.ccg': 'CCG Packer (Chinese Packer)',
-        '.charmve': 'Added by the PIN tool',
-        'BitArts': 'Crunch 2.0 Packer',
-        'DAStub': 'DAStub Dragon Armor protector',
-        '!EPack': 'Epack packer',
-        'FSG!': 'FSG packer (not a section name, but a good identifier)',
-        '.gentee': 'Gentee installer',
-        'kkrunchy': 'kkrunchy Packer',
-        '.mackt': 'ImpRec-created section',
-        '.MaskPE': 'MaskPE Packer',
-        'MEW': 'MEW packer',
-        '.MPRESS1': 'Mpress Packer',
-        '.MPRESS2': 'Mpress Packer',
-        '.neolite': 'Neolite Packer',
-        '.neolit': 'Neolite Packer',
-        '.nsp1': 'NsPack packer',
-        '.nsp0': 'NsPack packer',
-        '.nsp2': 'NsPack packer',
-        'nsp1': 'NsPack packer',
-        'nsp0': 'NsPack packer',
-        'nsp2': 'NsPack packer',
-        '.packed': 'RLPack Packer (first section)',
-        'pebundle': 'PEBundle Packer',
-        'PEBundle': 'PEBundle Packer',
-        'PEC2TO': 'PECompact packer',
-        'PECompact2': 'PECompact packer (not a section name, but a good identifier)',
-        'PEC2': 'PECompact packer',
-        'pec1': 'PECompact packer',
-        'pec2': 'PECompact packer',
-        'PEC2MO': 'PECompact packer',
-        'PELOCKnt': 'PELock Protector',
-        '.perplex': 'Perplex PE-Protector',
-        'PESHiELD': 'PEShield Packer',
-        '.petite': 'Petite Packer',
-        'petite': 'Petite Packer',
-        '.pinclie': 'Added by the PIN tool',
-        'ProCrypt': 'ProCrypt Packer',
-        '.RLPack': 'RLPack Packer (second section)',
-        '.rmnet': 'Ramnit virus marker',
-        'RCryptor': 'RPCrypt Packer',
-        '.RPCrypt': 'RPCrypt Packer',
-        '.seau': 'SeauSFX Packer',
-        '.sforce3': 'StarForce Protection',
-        '.spack': 'Simple Pack (by bagie)',
-        '.svkp': 'SVKP packer',
-        'Themida': 'Themida Packer',
-        '.Themida': 'Themida Packer',
-        'Themida ': 'Themida Packer',
-        '.taz': 'Some version os PESpin',
-        '.tsuarch': 'TSULoader',
-        '.tsustub': 'TSULoader',
-        '.packed': 'Unknown Packer',
-        'PEPACK!!': 'Pepack',
-        '.Upack': 'Upack packer',
-        '.ByDwing': 'Upack Packer',
-        'UPX0': 'UPX packer',
-        'UPX1': 'UPX packer',
-        'UPX2': 'UPX packer',
-        'UPX!': 'UPX packer',
-        '.UPX0': 'UPX Packer',
-        '.UPX1': 'UPX Packer',
-        '.UPX2': 'UPX Packer',
-        '.vmp0': 'VMProtect packer',
-        '.vmp1': 'VMProtect packer',
-        '.vmp2': 'VMProtect packer',
-        'VProtect': 'Vprotect Packer',
-        '.winapi': 'Added by API Override tool',
-        'WinLicen': 'WinLicense (Themida) Protector',
-        '_winzip_': 'WinZip Self-Extractor',
-        '.WWPACK': 'WWPACK Packer',
-        '.yP': 'Y0da Protector',
-        '.y0da': 'Y0da Protector',
-    }
-
-    matched = cache.get('packers_matched')
-    if matched is None:
-        sections = []
-        for section in pe.sections:
-            sections.append(section.Name.decode(errors='replace').rstrip('\x00'))
-
-        matched = []
-        for sec in sections:
-            if sec in packers.keys():
-                matched.append([sec, packers[sec]])
-
-        cache.set('packers_matched', matched)
-
-    lis = ''
-    for m in matched:
-        lis += f'<li>{_hesc(m[0])} -> {_hesc(m[1])}</li>'
-
-    _hdr('Packers matched by PE section')
-    _ul(lis, len(matched))
 
 
 def _imports(pe, config, cache):
@@ -661,6 +559,11 @@ def _compare(data, config, cache):
 
     _hdr('Spamsum file similarity scores')
     _ul(lis, len(config.compare_to))
+
+
+def _assemblyline(data, config, cache):
+    api = "https://localhost/api/v4"
+    cacert = "/Users/rida/Source/AssemblyLine/config/nginx.crt"
 
 
 # XXX Helpers
