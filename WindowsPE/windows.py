@@ -680,7 +680,7 @@ class VirtualBoxVM:
             return False, out.stderr.decode('utf-8')
 
 
-def _vbox_procmon(data, config, cache, vm):
+def _vbox_procmon(data: bytes, config: Config, cache: _Cache, vm: VirtualBoxVM):
     events = cache.get('procmon_events')
     err = None
     n = 0
@@ -700,6 +700,7 @@ def _vbox_procmon(data, config, cache, vm):
         cache.set('procmon_events_n', n)
     except malbook.Error as e:
         err = f'Virtual machine error: {e}'
+        vm.restore()
     except procmon_parser.PMLError:
         err = 'Procmon log file is corrupt'
 
