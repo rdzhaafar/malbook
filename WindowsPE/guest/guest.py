@@ -84,12 +84,10 @@ def submit():
     req = request.get_json()
     sha256 = req['sha256']
     sample_path = path.join(SAMPLES_PATH, sha256)
-    if path.exists(sample_path):
-        return json_reply_error(f'sample {sha256} has already been submitted')
-
-    sample = bytes(req['sample'])
-    with open(sample_path, 'wb') as f:
-        f.write(sample)
+    if not path.exists(sample_path):
+        sample = bytes(req['sample'])
+        with open(sample_path, 'wb') as f:
+            f.write(sample)
 
     log_path = path.join(LOGS_PATH, sha256)
     log_gen = Process(target=generate_log, args=(sample_path, log_path))

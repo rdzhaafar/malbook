@@ -168,6 +168,7 @@ def scan(sample: Path, config: Config) -> None:
     else:
         _scan(sample, config, cache, vm)
 
+    vm.shutdown()
     cache.save()
 
 
@@ -571,9 +572,10 @@ def _compare(data, config, cache):
 
 class VirtualBoxVM:
 
-    def __init__(self, name, vboxmanage_path='vboxmanage'):
+    def __init__(self, name, vboxmanage_path='vboxmanage', connection_attempts=30):
         self.vboxmanage_path = vboxmanage_path
         self.name = name
+        self.connection_attempts = connection_attempts
 
         # Check vboxmanage
         try:
@@ -599,37 +601,43 @@ class VirtualBoxVM:
         if not ok or not out.startswith('Value: '):
             raise malbook.Error('Virtual machine IPv4 not found')
         ip = out[len('Value: '):-1]
-        api = 'http://' + ip + ':5000/'
+        api = 'http://' + ip + ':5000'
         self.api = api
 
-        # Check VM connection and guest server status
+        # run and try to connect
+        self._cmd(['startvm', name, '--type', 'headless'])
+        self._check_connection()
+
+        # Take a base snapshot
+        snapshot = ''.join(random.choice(string.ascii_letters) for _ in range(20))
+        ok, err = self._cmd(['snapshot', name, 'take', snapshot])
+        if not ok:
+            raise malbook.Error(f'Cannot take snapshot: "{err}"')
+        self.snapshot = snapshot
+
+    def restore(self):
+        ok, err = self._cmd(['controlvm', self.name, 'poweroff'])
+        if not ok:
+            raise malbook.Error(f'Cannot shutdown virtual machine: {err}')
+        ok, err = self._cmd(['snapshot', self.name, 'restore', self.snapshot])
+        if not ok:
+            raise malbook.Error(f'Cannot restore snapshot: {err}')
+        ok, err = self._cmd(['startvm', self.name, '--type', 'headless'])
+        if not ok:
+            raise malbook.Error(f'Cannot start the virtual machine: {err}')
+        self._check_connection()
+
+    def shutdown(self):
+        self.restore()
+        self._cmd(['snapshot', self.name, 'delete', self.snapshot])
+        self._cmd(['controlvm', self.name, 'poweroff'])
+
+    def _check_connection(self):
         resp = self._req('GET', '/status')
         if resp is None:
-            raise malbook.Error(f'Cannot connect to "{name}" at {api}')
-        if resp.json()['status'] != 'ok':
-            raise malbook.Error(f'Guest error: {resp.json()["error"]}')
-
-        # # Take a base snapshot
-        # snapshot = ''.join(random.choice(string.ascii_letters) for _ in range(20))
-        # ok, _ = self._cmd(['snapshot', name, 'take', snapshot])
-        # if not ok:
-        #     raise malbook.Error(f'Cannot take base snapshot "{snapshot}"')
-        # self.snapshot = snapshot
-        # # Good to go!
-
-    # def restore(self):
-    #     ok, err = self._cmd(['snapshot', self.name, 'restore', self.snapshot])
-    #     if not ok:
-    #         self._cmd(['controlvm', self.name, 'poweroff'])
-    #         self._cmd(['snapshot', self.name, 'restore', self.snapshot])
-    #         self._cmd(['startvm', self.name, '--type', 'headless'])
-    #         raise malbook.Error(f'Cannot restore VM to snapshot {self.snapshot}\n{err}')
-
-    # def close(self):
-    #     # self.restore()
-    #     ok, err = self._cmd(['snapshot', self.name, 'delete', self.snapshot])
-    #     if not ok:
-    #         raise malbook.Error(f'Cannot delete snapshot {self.snapshot}\n{err}')
+            raise malbook.Error(f'Cannot connect to virtual machine at {self.api}')
+        elif resp.json()['status'] != 'ok':
+            raise malbook.Error(f'Virtual machine error: {resp.json()["error"]}')
 
     def analyze(self, sample_bytes, sample_sha256, cache):
         request = {
@@ -642,7 +650,7 @@ class VirtualBoxVM:
         # TODO: This is the hardcoded guest timeout, but it doesn't have
         # to be.
         time.sleep(10)
-        resp = self._req('GET', '/get_log', request, retries=10)
+        resp = self._req('GET', '/get_log', request)
         # XXX: This response is very large, since it contains the whole binary log.
         # De-serialize it once only.
         resp = resp.json()
@@ -650,18 +658,17 @@ class VirtualBoxVM:
             raise malbook.Error(f'Error getting the log back from the virtual machine.\n{resp["error"]}')
         cache.set('procmon_log', resp['log'])
         cache.set('pid', resp['pid'])
-        # self.restore()
+        self.restore()
 
-    def _req(self, method, endpoint, data={}, timeout=1, retries=5) -> Optional[req.Response]:
-        resp = None
-        while retries > 0:
+    def _req(self, method, endpoint, data=None) -> Optional[req.Response]:
+        for _ in range(self.connection_attempts):
             try:
                 resp = req.request(method, self.api + endpoint, json=data)
-                break
-            except:
-                time.sleep(timeout)
-                retries -= 1
-        return resp
+                return resp
+            except Exception as e:
+                print(e)
+                time.sleep(1)
+        return None
 
     def _cmd(self, cmd: List[str]) -> Tuple[bool, str]:
         full = [self.vboxmanage_path]
@@ -675,30 +682,32 @@ class VirtualBoxVM:
 
 def _vbox_procmon(data, config, cache, vm):
     events = cache.get('procmon_events')
+    err = None
+    n = 0
     if events is not None:
-        _hdr('Procmon events')
         n = cache.get('procmon_events_n')
-        _ul(events, n)
     try:
         vm.analyze(data, cache.get('sha256'), cache)
         log = io.BytesIO(bytes(cache.get('procmon_log')))
         pid = cache.get('pid')
         reader = procmon_parser.ProcmonLogsReader(log)
-        lis = ''
-        n = 0
+        events = ''
         for event in reader:
             if event.process.pid == pid:
-                lis += f'<li>{_hesc(event.__str__())}</li>'
+                events += f'<li>{_hesc(event.__str__())}</li>'
                 n += 1
-        cache.set('procmon_events', lis)
+        cache.set('procmon_events', events)
         cache.set('procmon_events_n', n)
-        _hdr('Procmon events')
-        _ul(lis, n)
     except malbook.Error as e:
-        _hdr(f"Cannot monitor using Procmon: {e.__str__()}")
+        err = f'Virtual machine error: {e}'
     except procmon_parser.PMLError:
-        _hdr('Procmon log file is corrupt. Malware is probably a ransomware.')
+        err = 'Procmon log file is corrupt'
 
+    _hdr('Procmon events')
+    if err is not None:
+        _ul(f'<li>{err}</li>', 1)
+    else:
+        _ul(events, n)
 
 # XXX Helpers
 
