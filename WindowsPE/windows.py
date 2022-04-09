@@ -137,8 +137,9 @@ class Config:
     compare: bool = False
     compare_to: List[Path] = []
 
-    virtualbox_procmon: bool = False
-    virtualbox_vm_name: str = None
+    procmon: bool = True
+    procmon_vm_name: str = None
+    procmon_connection_attempts: int = 20
 
     cache: bool = True
 
@@ -154,11 +155,16 @@ def scan(sample: Path, config: Config) -> None:
     if not path.exists(config.output_path):
         os.mkdir(config.output_path)
 
-    # XXX: Spin up the VM as early as possible, since it takes a while
+    # XXX: Spin up the Procmon VM as early as possible, since it takes a while
     # and lots of things can go wrong
     vm = None
-    if config.virtualbox_procmon:
-        vm = VirtualBoxVM(config.virtualbox_vm_name)
+    if config.procmon:
+        if config.procmon_vm_name is None:
+            raise malbook.Error('No virtual machine name supplied')
+        vm = VirtualBoxVM(
+            config.procmon_vm_name,
+            connection_attempts=config.procmon_connection_attempts
+        )
 
     if config.unzip:
         unzipped = _unzip(sample, config)
@@ -168,6 +174,7 @@ def scan(sample: Path, config: Config) -> None:
     else:
         _scan(sample, config, cache, vm)
 
+    # Discard VM snapshot
     vm.shutdown()
     cache.save()
 
@@ -202,8 +209,8 @@ def _scan(sample, config, cache, vm):
     if config.compare:
         _compare(data, config, cache)
 
-    if config.virtualbox_procmon:
-        _vbox_procmon(data, config, cache, vm)
+    if config.procmon:
+        _procmon(data, config, cache, vm)
 
 
 def _virustotal(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
@@ -639,7 +646,7 @@ class VirtualBoxVM:
         elif resp.json()['status'] != 'ok':
             raise malbook.Error(f'Virtual machine error: {resp.json()["error"]}')
 
-    def analyze(self, sample_bytes, sample_sha256, cache):
+    def analyze(self, sample_bytes, sample_sha256) -> Tuple[bytes, int]:
         request = {
             'sample': list(sample_bytes),
             'sha256': sample_sha256,
@@ -656,17 +663,16 @@ class VirtualBoxVM:
         resp = resp.json()
         if resp['status'] != 'ok':
             raise malbook.Error(f'Error getting the log back from the virtual machine.\n{resp["error"]}')
-        cache.set('procmon_log', resp['log'])
-        cache.set('pid', resp['pid'])
+
         self.restore()
+        return bytes(resp['log']), resp['pid']
 
     def _req(self, method, endpoint, data=None) -> Optional[req.Response]:
         for _ in range(self.connection_attempts):
             try:
                 resp = req.request(method, self.api + endpoint, json=data)
                 return resp
-            except Exception as e:
-                print(e)
+            except:
                 time.sleep(1)
         return None
 
@@ -680,16 +686,15 @@ class VirtualBoxVM:
             return False, out.stderr.decode('utf-8')
 
 
-def _vbox_procmon(data: bytes, config: Config, cache: _Cache, vm: VirtualBoxVM):
+def _procmon(data: bytes, config: Config, cache: _Cache, vm: VirtualBoxVM):
     events = cache.get('procmon_events')
     err = None
     n = 0
     if events is not None:
         n = cache.get('procmon_events_n')
     try:
-        vm.analyze(data, cache.get('sha256'), cache)
-        log = io.BytesIO(bytes(cache.get('procmon_log')))
-        pid = cache.get('pid')
+        logbytes, pid = vm.analyze(data, cache.get('sha256'))
+        log = io.BytesIO(logbytes)
         reader = procmon_parser.ProcmonLogsReader(log)
         events = ''
         for event in reader:
@@ -704,7 +709,7 @@ def _vbox_procmon(data: bytes, config: Config, cache: _Cache, vm: VirtualBoxVM):
     except procmon_parser.PMLError:
         err = 'Procmon log file is corrupt'
 
-    _hdr('Procmon events')
+    _hdr('Procmon captured events')
     if err is not None:
         _ul(f'<li>{err}</li>', 1)
     else:
