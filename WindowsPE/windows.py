@@ -1,5 +1,5 @@
 # XXX: Typing support
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 
 # XXX: Standard library imports
@@ -8,17 +8,18 @@ import zipfile
 from os import path
 import os
 import hashlib
-import subprocess
 import json
 import urllib.parse
 import re
 import functools
+import io
+import subprocess as sub
+import time
+import random
+import string
 
 import malbook
 
-# XXX: Virtualbox control code is so massive that 
-# it gets its own module
-import vbox
 
 # XXX: StringSifter breaks with LightGBM 3.3.2
 # LightGBM needs to be installed first to ensure that
@@ -32,7 +33,7 @@ import bs4
 malbook.ensure_package('yara-python')
 import yara
 malbook.ensure_package('requests')
-import requests
+import requests as req
 malbook.ensure_package('peid')
 import peid
 malbook.ensure_package('pyspamsum')
@@ -41,6 +42,8 @@ malbook.ensure_package('pefile')
 import pefile
 malbook.ensure_package('py-tlsh')
 import tlsh
+malbook.ensure_package('procmon-parser')
+import procmon_parser
 
 
 class _Cache:
@@ -135,7 +138,7 @@ class Config:
     compare_to: List[Path] = []
 
     virtualbox_procmon: bool = False
-    virtualbox_vm_name: Optional[str] = None
+    virtualbox_vm_name: str = None
 
     cache: bool = True
 
@@ -151,18 +154,24 @@ def scan(sample: Path, config: Config) -> None:
     if not path.exists(config.output_path):
         os.mkdir(config.output_path)
 
+    # XXX: Spin up the VM as early as possible, since it takes a while
+    # and lots of things can go wrong
+    vm = None
+    if config.virtualbox_procmon:
+        vm = VirtualBoxVM(config.virtualbox_vm_name)
+
     if config.unzip:
         unzipped = _unzip(sample, config)
         for s in os.listdir(unzipped):
             sample_path = path.join(unzipped, s)
-            _scan(sample_path, config, cache)
+            _scan(sample_path, config, cache, vm)
     else:
-        _scan(sample, config, cache)
+        _scan(sample, config, cache, vm)
 
     cache.save()
 
 
-def _scan(sample: Path, config: Config, cache: _Cache):
+def _scan(sample, config, cache, vm):
     name = path.basename(sample)
     _hdr('Report for ' + name, h=1)
 
@@ -192,6 +201,9 @@ def _scan(sample: Path, config: Config, cache: _Cache):
     if config.compare:
         _compare(data, config, cache)
 
+    if config.virtualbox_procmon:
+        _vbox_procmon(data, config, cache, vm)
+
 
 def _virustotal(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
     if config.virustotal_api_key is None:
@@ -204,7 +216,7 @@ def _virustotal(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
     api = 'https://www.virustotal.com/api/v3'
 
     def make_request(endpoint: str, request: Dict[str, str]):
-        resp = requests.post(api + endpoint, data=request, headers=headers)
+        resp = req.post(api + endpoint, data=request, headers=headers)
         if resp.status_code == 401:
             raise malbook.Error('VirusTotal API key is incorrect')
         elif resp.status_code == 429:
@@ -217,7 +229,7 @@ def _virustotal(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
 def _bazaar(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
     api = 'https://mb-api.abuse.ch/api/v1/'
     def make_request(query):
-        response = requests.post(api, data=query)
+        response = req.post(api, data=query)
         if not response.ok:
             raise malbook.Error("Can't access Malware Bazaar")
         return response.json()
@@ -351,7 +363,7 @@ def _imports(pe, config, cache):
         if config.imports_malapi:
             cat = cache.get_common(imp)
             if cat is None:
-                page = requests.get(malapi_link)
+                page = req.get(malapi_link)
                 if not page.ok:
                     raise malbook.Error("Can't connect to MalAPI")
                 soup = bs4.BeautifulSoup(page.content, 'html.parser')
@@ -441,7 +453,7 @@ def _strings(sample, config, cache):
     strings = cache.get('strings')
     if strings is None:
         floss_exe = config.strings_floss
-        out = subprocess.run(
+        out = sub.run(
             [floss_exe, '-n', str(config.strings_min_length), '-q', sample],
             capture_output=True,
         )
@@ -455,7 +467,7 @@ def _strings(sample, config, cache):
         ranked_strings = cache.get('ranked_strings')
         if ranked_strings is None:
             strs = '\n'.join(strings)
-            ranked = subprocess.run(
+            ranked = sub.run(
                 ['rank_strings'],
                 capture_output=True, input=strs, encoding='utf-8'
             )
@@ -534,16 +546,12 @@ def _compare(data, config, cache):
 
     if path.isdir(config.compare_to):
         root = config.compare_to
-        
         for f in os.listdir(root):
             topath = path.join(root, f)
             with open(topath, 'rb') as fp:
                 comp_data = fp.read()
             comp_ss = spamsum.spamsum(comp_data)
             match 
-
-
-
 
     lis = ''
     for f in config.compare_to:
@@ -561,9 +569,135 @@ def _compare(data, config, cache):
     _ul(lis, len(config.compare_to))
 
 
-def _assemblyline(data, config, cache):
-    api = "https://localhost/api/v4"
-    cacert = "/Users/rida/Source/AssemblyLine/config/nginx.crt"
+class VirtualBoxVM:
+
+    def __init__(self, name, vboxmanage_path='vboxmanage'):
+        self.vboxmanage_path = vboxmanage_path
+        self.name = name
+
+        # Check vboxmanage
+        try:
+            self._cmd(['-v'])
+        except:
+            raise malbook.Error(f'{vboxmanage_path} does not exist. Is VirtualBox installed?')
+
+        # Check VM config
+        ok, out = self._cmd(['showvminfo', name, '--machinereadable'])
+        if not ok:
+            raise malbook.Error(f'Virtual machine "{name}" not found')
+        for line in out.split('\n'):
+            split = line.split('=')
+            if len(split) != 2:
+                continue
+            key = split[0]
+            val = split[1]
+            if key == 'GuestOSType' and val != '"Windows10_64"':
+                raise malbook.Error(f'OS "{val}" is not supported')
+
+        # Get IP and set API address
+        ok, out = self._cmd(['guestproperty', 'get', name, '/VirtualBox/GuestInfo/Net/0/V4/IP'])
+        if not ok or not out.startswith('Value: '):
+            raise malbook.Error('Virtual machine IPv4 not found')
+        ip = out[len('Value: '):-1]
+        api = 'http://' + ip + ':5000/'
+        self.api = api
+
+        # Check VM connection and guest server status
+        resp = self._req('GET', '/status')
+        if resp is None:
+            raise malbook.Error(f'Cannot connect to "{name}" at {api}')
+        if resp.json()['status'] != 'ok':
+            raise malbook.Error(f'Guest error: {resp.json()["error"]}')
+
+        # # Take a base snapshot
+        # snapshot = ''.join(random.choice(string.ascii_letters) for _ in range(20))
+        # ok, _ = self._cmd(['snapshot', name, 'take', snapshot])
+        # if not ok:
+        #     raise malbook.Error(f'Cannot take base snapshot "{snapshot}"')
+        # self.snapshot = snapshot
+        # # Good to go!
+
+    # def restore(self):
+    #     ok, err = self._cmd(['snapshot', self.name, 'restore', self.snapshot])
+    #     if not ok:
+    #         self._cmd(['controlvm', self.name, 'poweroff'])
+    #         self._cmd(['snapshot', self.name, 'restore', self.snapshot])
+    #         self._cmd(['startvm', self.name, '--type', 'headless'])
+    #         raise malbook.Error(f'Cannot restore VM to snapshot {self.snapshot}\n{err}')
+
+    # def close(self):
+    #     # self.restore()
+    #     ok, err = self._cmd(['snapshot', self.name, 'delete', self.snapshot])
+    #     if not ok:
+    #         raise malbook.Error(f'Cannot delete snapshot {self.snapshot}\n{err}')
+
+    def analyze(self, sample_bytes, sample_sha256, cache):
+        request = {
+            'sample': list(sample_bytes),
+            'sha256': sample_sha256,
+        }
+        resp = self._req('POST', '/submit', request)
+        if resp.json()['status'] != 'ok':
+            raise malbook.Error(f'Cannot submit sample {sample_sha256} to the virtual machine.\n{resp.json()["error"]}')
+        # TODO: This is the hardcoded guest timeout, but it doesn't have
+        # to be.
+        time.sleep(10)
+        resp = self._req('GET', '/get_log', request, retries=10)
+        # XXX: This response is very large, since it contains the whole binary log.
+        # De-serialize it once only.
+        resp = resp.json()
+        if resp['status'] != 'ok':
+            raise malbook.Error(f'Error getting the log back from the virtual machine.\n{resp["error"]}')
+        cache.set('procmon_log', resp['log'])
+        cache.set('pid', resp['pid'])
+        # self.restore()
+
+    def _req(self, method, endpoint, data={}, timeout=1, retries=5) -> Optional[req.Response]:
+        resp = None
+        while retries > 0:
+            try:
+                resp = req.request(method, self.api + endpoint, json=data)
+                break
+            except:
+                time.sleep(timeout)
+                retries -= 1
+        return resp
+
+    def _cmd(self, cmd: List[str]) -> Tuple[bool, str]:
+        full = [self.vboxmanage_path]
+        full.extend(cmd)
+        out = sub.run(full, capture_output=True)
+        if out.returncode == 0:
+            return True, out.stdout.decode('utf-8')
+        else:
+            return False, out.stderr.decode('utf-8')
+
+
+def _vbox_procmon(data, config, cache, vm):
+    events = cache.get('procmon_events')
+    if events is not None:
+        _hdr('Procmon events')
+        n = cache.get('procmon_events_n')
+        _ul(events, n)
+    try:
+        vm.analyze(data, cache.get('sha256'), cache)
+        log = io.BytesIO(bytes(cache.get('procmon_log')))
+        pid = cache.get('pid')
+        reader = procmon_parser.ProcmonLogsReader(log)
+        lis = ''
+        n = 0
+        for event in reader:
+            if event.process.pid == pid:
+                lis += f'<li>{_hesc(event.__str__())}</li>'
+                n += 1
+        cache.set('procmon_events', lis)
+        cache.set('procmon_events_n', n)
+        _hdr('Procmon events')
+        _ul(lis, n)
+    except malbook.Error as e:
+        _hdr(f"Cannot monitor using Procmon: {e.__str__()}")
+    except procmon_parser.PMLError:
+        _hdr('Procmon log file is corrupt. Malware is probably a ransomware.')
 
 
 # XXX Helpers
