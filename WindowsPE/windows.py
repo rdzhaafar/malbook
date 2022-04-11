@@ -1,8 +1,6 @@
-# XXX: Typing support
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 
-# XXX: Standard library imports
 import html
 import zipfile
 from os import path
@@ -17,17 +15,14 @@ import subprocess as sub
 import time
 import random
 import string
+import platform
 
 import malbook
 
-
-# XXX: StringSifter breaks with LightGBM 3.3.2
-# LightGBM needs to be installed first to ensure that
-# version gets locked at 3.1.0
+# NOTE: StringSifter breaks with lightgbm>=3.3.2
 malbook.ensure_package('lightgbm==3.1.0')
 malbook.ensure_package('stringsifter')
 
-# XXX: Third-party imports that need to be installed first
 malbook.ensure_package('beautifulsoup4')
 import bs4
 malbook.ensure_package('yara-python')
@@ -48,11 +43,7 @@ import procmon_parser
 
 class _Cache:
 
-    _sample: str
-    _cache: Dict[str, Dict[str, Any]]
-    _cache_file: Path
-
-    def __init__(self, cache_file: Path):
+    def __init__(self, cache_file):
         try:
             with open(cache_file, 'rt') as f:
                 self._cache = json.load(f)
@@ -71,54 +62,44 @@ class _Cache:
         with open(self._cache_file, 'wt') as f:
             json.dump(self._cache, f)
 
-    def set_current_sample(self, sample: str):
+    def set_current_sample(self, sample):
         self._sample = sample
         if sample not in self._cache:
             self._cache[sample] = {}
 
-    def get(self, key: str):
+    def get(self, key):
         if key in self._cache[self._sample]:
             return self._cache[self._sample][key]
         return None
 
-    def set(self, key: str, value: Any):
+    def set(self, key, value):
         self._cache[self._sample][key] = value
 
-    def get_common(self, key: str):
+    def get_common(self, key):
         if key in self._cache['common']:
             return self._cache['common'][key]
         return None
 
-    def set_common(self, key: str, value: Any):
+    def set_common(self, key, value):
         self._cache['common'][key] = value
 
 
-_CWD = os.getcwd()
-
-
 class Config:
-
     hashes: List[str] = ['md5', 'sha1', 'sha256', 'imphash', 'spamsum', 'tlsh']
 
     malware_bazaar: bool = True
-    malware_bazaar_sha256: bool = True
-    malware_bazaar_imphash: bool = True
-    malware_bazaar_imphash_max: int = 100
-    malware_bazaar_tlsh: bool = True
-    malware_bazaar_tlsh_max: int = 100
 
-    virustotal: bool = True
     virustotal_api_key: Optional[str] = None
+    virustotal_analysis_timeout: int = 30
 
-    output_path: Path = path.join(_CWD, 'output')
+    output_path: Path = path.join(os.getcwd(), 'output')
 
     unzip: bool = True
     unzip_password: Optional[bytes] = b'infected'
 
     strings: bool = True
-    strings_floss: Path = path.join(_CWD, 'bin', 'floss')
+    strings_floss_exe: Path = path.join(os.getcwd(), 'bin', platform.system() + '-floss')
     strings_rank: bool = True
-
     strings_min_length: int = 8
     strings_regex_rules: Dict[str, re.Pattern] = {
         'http': re.compile(r'http.*'),
@@ -126,20 +107,17 @@ class Config:
     }
 
     yara: bool = True
-    yara_rules: Path = path.join(_CWD, 'yara')
-    yara_ignore: List[str] = []
+    yara_rules_dir: Path = path.join(os.getcwd(), 'yara')
 
-    packer: bool = True
+    peid: bool = True
 
     imports: bool = True
     imports_malapi: bool = True
 
-    compare: bool = False
-    compare_to: List[Path] = []
-
-    procmon: bool = True
-    procmon_vm_name: str = None
+    procmon_vm: Optional[str] = None
     procmon_connection_attempts: int = 20
+
+    compare_to: List[Path] = []
 
     cache: bool = True
 
@@ -151,177 +129,188 @@ def scan(sample: Path, config: Config) -> None:
     else:
         # XXX: Create discardable cache not backed by a file
         cache = _Cache(None)
-
     if not path.exists(config.output_path):
         os.mkdir(config.output_path)
-
-    # XXX: Spin up the Procmon VM as early as possible, since it takes a while
-    # and lots of things can go wrong
+    # XXX: Spin up the virtual machine as early as possible
     vm = None
-    if config.procmon:
-        if config.procmon_vm_name is None:
-            raise malbook.Error('No virtual machine name supplied')
-        vm = VirtualBoxVM(
-            config.procmon_vm_name,
-            connection_attempts=config.procmon_connection_attempts
-        )
+    if config.procmon_vm is not None:
+        try:
+            vm = _VirtualMachine(
+                config.procmon_vm_name,
+                connection_attempts=config.procmon_connection_attempts
+            )
+        except Exception as e:
+            print('error: ' + str(e))
+            return
 
-    if config.unzip:
-        unzipped = _unzip(sample, config)
-        for s in os.listdir(unzipped):
-            sample_path = path.join(unzipped, s)
-            _scan(sample_path, config, cache, vm)
-    else:
-        _scan(sample, config, cache, vm)
+    try:
+        if config.unzip:
+            unzipped = _unzip(sample, config)
+            for s in os.listdir(unzipped):
+                sample_path = path.join(unzipped, s)
+                _scan(sample_path, config, cache, vm)
+        else:
+            _scan(sample, config, cache, vm)
+    except Exception as e:
+        print('error: ' + str(e))
 
-    # Discard VM snapshot
-    vm.shutdown()
+    if vm is not None:
+        try:
+            vm.shutdown()
+        except Exception as e:
+            print('error: ' + str(e))
     cache.save()
 
 
 def _scan(sample, config, cache, vm):
-    name = path.basename(sample)
-    _hdr('Report for ' + name, h=1)
-
+    _hdr('Report for ' + path.basename(sample), h=1)
     with open(sample, 'rb') as f:
         data = f.read()
-
-    # XXX: Loading file as a PE and computing its hashes
-    # are the only mandatory scan steps.
     pe = _pe(data)
     _checksums(data, pe, config, cache)
 
     if config.malware_bazaar:
-        _bazaar(data, pe, config, cache)
-
+        _bazaar(cache)
+    if config.virustotal_api_key is not None:
+        _virustotal(data, config, cache)
     if config.strings:
         _strings(sample, config, cache)
-
     if config.yara:
         _yara(data, config, cache)
-
-    if config.packer:
-        _peid(sample, config, cache)
-
+    if config.peid:
+        _peid(sample, cache)
     if config.imports:
         _imports(pe, config, cache)
-
-    if config.compare:
+    if len(config.compare_to) != 0:
         _compare(data, config, cache)
-
-    if config.procmon:
-        _procmon(data, config, cache, vm)
-
-
-def _virustotal(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
-    if config.virustotal_api_key is None:
-        raise malbook.Error('Need a valid VirusTotal API key')
-
-    headers = {
-        'x-apikey': config.virustotal_api_key,
-        'Accept': 'application/json',
-    }
-    api = 'https://www.virustotal.com/api/v3'
-
-    def make_request(endpoint: str, request: Dict[str, str]):
-        resp = req.post(api + endpoint, data=request, headers=headers)
-        if resp.status_code == 401:
-            raise malbook.Error('VirusTotal API key is incorrect')
-        elif resp.status_code == 429:
-            raise malbook.Error('VirusTotal quota exceeded')
-        elif not resp.ok:
-            raise malbook.Error("Can't access VirusTotal")
-        return resp.json()
+    if config.procmon_vm is not None:
+        _procmon(data, cache, vm)
 
 
-def _bazaar(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
-    api = 'https://mb-api.abuse.ch/api/v1/'
+def _virustotal(data, config, cache):
+    virustotal_response = cache.get('virustotal_response')
+    if virustotal_response is None:
+        if config.virustotal_api_key is None:
+            raise malbook.Error('Need a valid VirusTotal API key')
+        def check(resp: req.Response):
+            if resp.ok:
+                return
+            code = resp.status_code
+            if code == 401:
+                raise malbook.Error('VirusTotal API key is incorrect')
+            elif code == 429:
+                raise malbook.Error('VirusTotal daily quota exceeded')
+            else:
+                raise malbook.Error('Cannot connect to VirusTotal')
+        sha256 = cache.get('sha256')
+        files = {'file': (sha256, io.BytesIO(data))}
+        headers = {
+            'x-apikey': config.virustotal_api_key,
+            'Accept': 'application/json',
+        }
+        resp = req.post(
+            'https://www.virustotal.com/api/v3/files',
+            headers=headers,
+            files=files,
+        )
+        check(resp)
+        analysis_id = resp.json()['data']['id']
+        url = 'https://www.virustotal.com/api/v3/analyses/' + analysis_id
+        for _ in range(config.virustotal_analysis_timeout):
+            time.sleep(5)
+            resp = req.get(url, headers=headers)
+            check(resp)
+            status = resp.json()['data']['attributes']['status']
+            if status == 'completed':
+                virustotal_response = resp.json()
+                cache.set('virustotal_response', virustotal_response)
+                break
+
+    if virustotal_response is None:
+        raise malbook.Error('Cannot get analysis result back from VirusTotal')
+    results = virustotal_response['data']['attributes']['results']
+    lis = ''
+    n = 0
+    for engine, res in results.items():
+        cat = res['category']
+        if cat == 'suspicious' or cat == 'malicious':
+            verdict = res['result']
+            lis += f'<li><b>{engine}</b> [{cat}]'
+            if verdict is not None:
+                lis += f'- {verdict}'
+            lis += '</li>'
+            n += 1
+
+    if n == 0:
+        malbook.output('<h3>No malware engines detected a threat</h3>')
+    else:
+        _hdr(f'{n} malware engines detected a threat')
+        _ul(lis, n)
+
+
+def _bazaar(cache):
     def make_request(query):
-        response = req.post(api, data=query)
+        response = req.post('https://mb-api.abuse.ch/api/v1/', data=query)
         if not response.ok:
             raise malbook.Error("Can't access Malware Bazaar")
         return response.json()
 
-    lis = ''
-    n = 0
-    if config.malware_bazaar_sha256:
-        n += 1
+    out = ''
+    sha256 = cache.get('sha256')
+    tlsh_ = cache.get('tlsh')
+    imphash = cache.get('imphash')
 
-        sha256 = cache.get('sha256')
-        if sha256 is None:
-            sha256 = _csum(hashlib.sha256, data)
-            cache.set('sha256')
-        query = {
+    resp = cache.get('sha256_malwarebazaar_response')
+    if resp is None:
+        resp = cache.get('sha256_malwarebazaar_response') or make_request({
             'query': 'get_info',
             'hash': sha256,
-        }
-        response = make_request(query)
-        if response['query_status'] == 'hash_not_found':
-            lis += '<li>There is no sample with matching sha256 on Malware Bazaar</li>'
+        })
+        cache.set('sha256_malwarebazaar_response', resp)
+    if resp['query_status'] == 'hash_not_found':
+        out += '<li>No sample with this sha256 found</li>'
+    else:
+        out += f'<li><a href="https://bazaar.abuse.ch/sample/{sha256}">Sample page</a>'
+
+    if imphash is not None:
+        resp = cache.get('imphash_malwarebazaar_response')
+        if resp is None:
+            resp = make_request({
+                'query': 'get_imphash',
+                'imphash': imphash,
+                'limit': 100,
+            })
+            cache.set('imphash_malwarebazaar_response', resp)
+        if resp['query_status'] == 'no_results':
+            out += '<li>No samples with matching imphash found</li>'
         else:
-            link = f'https://bazaar.abuse.ch/sample/{sha256}'
-            lis += f'''<li><a href="{link}">Sample page</a> on Malware Bazaar</li>'''
+            n = len(resp['data'])
+            link = f'https://bazaar.abuse.ch/browse.php?search=imphash:{imphash}'
+            out += f'<li><a href="{link}">{n} samples</a> with matching imphash</li>'
 
-    if config.malware_bazaar_imphash:
-        n += 1
-
-        imphash = cache.get('imphash')
-        if imphash is None:
-            imphash = pe.get_imphash()
-            cache.set('imphash', imphash)
-        query = {
-            'query': 'get_imphash',
-            'imphash': imphash,
-            'limit': config.malware_bazaar_imphash_max,
-        }
-        response = make_request(query)
-        if response['query_status'] == 'no_results':
-            lis += '<li>There are no samples with matching imphash on Malware Bazaar</li>'
+    if tlsh_ is not None:
+        resp = cache.get('tlsh_malwarebazaar_response')
+        if resp is None:
+            # XXX: Malware Bazaar errors out when it receives
+            # TLSH with the version prefix (T1...), which is especially
+            # strange, considering that they provide the TLSH _with_
+            # the version prefix on the website.
+            tlsh_ = tlsh_[2:]
+            resp = make_request({
+                'query': 'get_tlsh',
+                'tlsh': tlsh_,
+                'limit': 100,
+            })
+            cache.set('tlsh_malwarebazaar_response', resp)
+        if resp['query_status'] == 'no_results':
+            out += '<li>No samples with matching tlsh found</li>'
         else:
-            inner = ''
-            for sample in response['data']:
-                link = f'https://bazaar.abuse.ch/sample/{sample["sha256_hash"]}'
-                inner += f'<li><a href="{link}">{sample["file_name"]}</a></li>'
-            lis += f'''<li>These samples from Malware Bazaar had matching imphash:
-                    <ul>
-                        {inner}
-                    </ul>
-                   '''
+            n = len(resp['data'])
+            link = f'https://bazaar.abuse.ch/browse.php?search=tlsh:{tlsh_}'
+            out += f'<li><a href="{link}">{n} samples</a> with matching tlsh</li>'
 
-    if config.malware_bazaar_tlsh:
-        n += 1
-
-        tlsh_ = cache.get('tlsh')
-        if tlsh_ is None:
-            tlsh_ = tlsh.hash(data)
-            cache.set('tlsh', tlsh_)
-
-        # XXX: Malware Bazaar errors out when it receives
-        # TLSH with the version prefix (T1...), which is especially
-        # strange, considering that they provide the TLSH _with_
-        # the version prefix on the website.
-        tlsh_ = tlsh_[2:]
-        query = {
-            'query': 'get_tlsh',
-            'tlsh': tlsh_,
-            'limit': config.malware_bazaar_tlsh_max,
-        }
-        response = make_request(query)
-        if response['query_status'] == 'no_results':
-            lis += '<li>There are no samples with matching TLSH on Malware Bazaar</li>'
-        else:
-            inner = ''
-            for sample in response['data']:
-                link = f'https://bazaar.abuse.ch/sample/{sample["sha256_hash"]}'
-                inner += f'<li><a href="{link}">{sample["file_name"]}</a></li>'
-            lis += f'''<li>These samples from Malware Bazaar had matching TLSH:
-                    <ul>
-                        {inner}
-                    </ul>
-                   '''
-
-    _hdr('Malware Bazaar')
-    _ul(lis, n)
+    _hdr('Malware Bazaar lookup')
+    malbook.output(out)
 
 
 def _pe(data):
@@ -341,7 +330,6 @@ def _unzip(zip_path, config):
     zip_out = path.join(config.output_path, sha256)
 
     if path.exists(zip_out):
-        # XXX: Got extracted previously
         return zip_out
 
     os.mkdir(zip_out)
@@ -373,7 +361,7 @@ def _imports(pe, config, cache):
             if cat is None:
                 page = req.get(malapi_link)
                 if not page.ok:
-                    raise malbook.Error("Can't connect to MalAPI")
+                    raise malbook.Error('Cannot connect to MalAPI')
                 soup = bs4.BeautifulSoup(page.content, 'html.parser')
                 found = soup.find_all('span', class_='attack-container')
                 if len(found) != 0:
@@ -388,12 +376,12 @@ def _imports(pe, config, cache):
                 lis.append(f'<li>{_hesc(imp)} - <b>{_hesc(cat)}</b> [<a href={_hesc(google_link)}>Google</a>] [<a href={_hesc(malapi_link)}>MalAPI</a>]')
 
         else:
-            # XXX: config.imports_malapi == False
             lis.append(f'<li>{_hesc(imp)} [<a href={_hesc(google_link)}>Google</a>]</li>')
 
-    # HACK: If import was found on MalAPI, then make
-    # sure it appears before the rest of the imports.
     def cmp_imports(i0, i1):
+        # XXX: Make imports found on MalAPI appear
+        # first and also make helpers appear at the
+        # bottom of those.
         ini0 = 'MalAPI' in i0
         ini1 = 'MalAPI' in i1
         if ini0 and ini1 and 'Helper' in i0:
@@ -409,38 +397,38 @@ def _imports(pe, config, cache):
     lis.sort(key=functools.cmp_to_key(cmp_imports))
     lis = ''.join(lis)
 
-    _hdr('PE Imports')
+    _hdr('Portable executable imports')
     _ul(lis, len(imports))
 
 
-def _peid(sample, config, cache):
+def _peid(sample, cache):
     packer = cache.get('packer')
     if packer is None:
         try:
             packer = peid.identify_packer(sample)[0][1][0]
         except:
-            packer = 'Could not detect packer/compiler'
-
+            packer = None
         cache.set('packer', packer)
 
-    _hdr('Packer/compiler detected by PEID')
-    malbook.output(f'<p>{packer}</p>')
+    if packer is not None:
+        _hdr('PEiD detected packer/compiler')
+        malbook.output(f'<p>{packer}</p>')
+    else:
+        malbook.output('<h3>PEiD did not detect a packer/compiler</h3>')
 
 
 def _yara(data, config, cache):
-    rules = os.listdir(config.yara_rules)
+    rules = os.listdir(config.yara_rules_dir)
 
     if cache.get('yara') is None:
         cache.set('yara', [])
 
     matches = []
     for r in rules:
-        if r in config.yara_ignore:
-            continue
         if r in cache.get('yara'):
             matches.append(r)
         else:
-            rule_path = path.join(config.yara_rules, r)
+            rule_path = path.join(config.yara_rules_dir, r)
             with open(rule_path, 'rt') as f:
                 src = f.read()
             rule = yara.compile(source=src)
@@ -453,20 +441,24 @@ def _yara(data, config, cache):
     for m in matches:
         lis += f'<li>{_hesc(m)}</li>'
 
-    _hdr('Matching Yara rules')
-    _ul(lis, len(matches))
+    n = len(matches)
+    if n == 0:
+        malbook.output('<h3>There are no matching Yara rules</h3>')
+    else:
+        _hdr(f'{n} matching Yara rules')
+        _ul(lis, n)
 
 
 def _strings(sample, config, cache):
     strings = cache.get('strings')
     if strings is None:
-        floss_exe = config.strings_floss
+        floss_exe = config.strings_floss_exe
         out = sub.run(
             [floss_exe, '-n', str(config.strings_min_length), '-q', sample],
             capture_output=True,
         )
         if out.returncode != 0:
-            raise malbook.Error('FLOSS returned non-zero exit code', out.stderr.decode())
+            raise malbook.Error(f'FLOSS returned non-zero exit code:\n{out.stderr.decode()}')
 
         strings = out.stdout.decode().split('\n')
         cache.set('strings', strings)
@@ -508,8 +500,6 @@ def _strings(sample, config, cache):
 
 
 def _checksums(data, pe, config, cache):
-    # XXX: The only hash that gets computed unconditionally
-    # is SHA256, because we use it for cached result lookup
     sha256 = _csum(hashlib.sha256, data)
     cache.set_current_sample(sha256)
     cache.set('sha256', sha256)
@@ -517,15 +507,11 @@ def _checksums(data, pe, config, cache):
     lis = ''
     for h in config.hashes:
         sum = ''
-
-        # XXX: We support all hashlib algorithms, except for SHAKE_128
-        # and SHAKE_256, since they require digest length.
         if hasattr(hashlib, h) and not h.startswith('shake'):
             sum = cache.get(h)
             if sum is None:
                 alg = getattr(hashlib, h)
                 sum = _csum(alg, data)
-
         elif h == 'imphash':
             sum = cache.get(h) or pe.get_imphash()
         elif h == 'spamsum':
@@ -537,47 +523,32 @@ def _checksums(data, pe, config, cache):
                 raise malbook.Error('shake_128 and shake_256 are not supported')
             else:
                 raise malbook.Error(f'Unknown hash algorithm {h}')
-
         cache.set(h, sum)
-
         lis += f'<li><b>{h}</b> - {sum}</li>'
 
-    _hdr('Computed hashes')
+    _hdr('Checksums')
     _ul(lis, len(config.hashes))
 
 
 def _compare(data, config, cache):
-    sample_ss = spamsum.spamsum(data)
-
+    sample_sum = cache.get('spamsum')
+    if sample_sum is None:
+        sample_sum = spamsum.spamsum(data)
+        cache.set('spamsum', sample_sum)
     lis = ''
     n = 0
-
-    if path.isdir(config.compare_to):
-        root = config.compare_to
-        for f in os.listdir(root):
-            topath = path.join(root, f)
-            with open(topath, 'rb') as fp:
-                comp_data = fp.read()
-            comp_ss = spamsum.spamsum(comp_data)
-            match 
-
-    lis = ''
-    for f in config.compare_to:
-        match = cache.get(f'compare-{f}')
-        if match is None:
-            with open(f, 'rb') as fp:
-                comp_data = fp.read()
-            h0 = spamsum.spamsum(data)
-            h1 = spamsum.spamsum(comp_data)
-            match = spamsum.match(h0, h1)
-            cache.set(f'compare-{f}', match)
-        lis += f'<li><b>{_hesc(f)}</b> - ({match}%)</li>'
-
-    _hdr('Spamsum file similarity scores')
-    _ul(lis, len(config.compare_to))
+    for fpath in config.compare_to:
+        with open(fpath, 'rb') as f:
+            fdata = f.read()
+        f_sum = spamsum.spamsum(fdata)
+        match = spamsum.match(sample_sum, f_sum)
+        lis += f'<li>{match}% - {fpath}</li>'
+        n += 1
+    _hdr('Similarity scores')
+    _ul(lis, n)
 
 
-class VirtualBoxVM:
+class _VirtualMachine:
 
     def __init__(self, name, vboxmanage_path='vboxmanage', connection_attempts=30):
         self.vboxmanage_path = vboxmanage_path
@@ -643,10 +614,12 @@ class VirtualBoxVM:
         resp = self._req('GET', '/status')
         if resp is None:
             raise malbook.Error(f'Cannot connect to virtual machine at {self.api}')
-        elif resp.json()['status'] != 'ok':
-            raise malbook.Error(f'Virtual machine error: {resp.json()["error"]}')
+        resp = resp.json()
+        if resp['status'] != 'ok':
+            err = resp['error']
+            raise malbook.Error(f'Virtual machine error: {err}')
 
-    def analyze(self, sample_bytes, sample_sha256) -> Tuple[bytes, int]:
+    def analyze(self, sample_bytes, sample_sha256):
         request = {
             'sample': list(sample_bytes),
             'sha256': sample_sha256,
@@ -654,8 +627,7 @@ class VirtualBoxVM:
         resp = self._req('POST', '/submit', request)
         if resp.json()['status'] != 'ok':
             raise malbook.Error(f'Cannot submit sample {sample_sha256} to the virtual machine.\n{resp.json()["error"]}')
-        # TODO: This is the hardcoded guest timeout, but it doesn't have
-        # to be.
+        # XXX: This timeout is hardcoded in the guest server
         time.sleep(10)
         resp = self._req('GET', '/get_log', request)
         # XXX: This response is very large, since it contains the whole binary log.
@@ -667,7 +639,7 @@ class VirtualBoxVM:
         self.restore()
         return bytes(resp['log']), resp['pid']
 
-    def _req(self, method, endpoint, data=None) -> Optional[req.Response]:
+    def _req(self, method, endpoint, data=None):
         for _ in range(self.connection_attempts):
             try:
                 resp = req.request(method, self.api + endpoint, json=data)
@@ -686,14 +658,13 @@ class VirtualBoxVM:
             return False, out.stderr.decode('utf-8')
 
 
-def _procmon(data: bytes, config: Config, cache: _Cache, vm: VirtualBoxVM):
+def _procmon(data, cache, vm):
     events = cache.get('procmon_events')
+    n = cache.get('procmon_events_n') or 0
+    sha256 = cache.get('sha256')
     err = None
-    n = 0
-    if events is not None:
-        n = cache.get('procmon_events_n')
     try:
-        logbytes, pid = vm.analyze(data, cache.get('sha256'))
+        logbytes, pid = vm.analyze(data, sha256)
         log = io.BytesIO(logbytes)
         reader = procmon_parser.ProcmonLogsReader(log)
         events = ''
@@ -709,41 +680,32 @@ def _procmon(data: bytes, config: Config, cache: _Cache, vm: VirtualBoxVM):
     except procmon_parser.PMLError:
         err = 'Procmon log file is corrupt'
 
-    _hdr('Procmon captured events')
     if err is not None:
+        malbook.output('<h3>An error occurred while capturing events with Process Monitor</h3>')
+        malbook.output(f'<p>{err}</p>')
         _ul(f'<li>{err}</li>', 1)
     else:
+        _hdr('Events captured by Process Monitor')
         _ul(events, n)
 
-# XXX Helpers
 
-
-# Computes the checksum and returns the digest. Algorithm
-# must be an instance of _hashlib.HASH
 def _csum(algorithm, data):
     h = algorithm()
     h.update(data)
     return h.hexdigest()
 
 
-# XXX: Output helpers
-
-
-# Escapes HTML sequences in text
 def _hesc(text):
     return html.escape(text)
 
 
-# Outputs an HTML header
 def _hdr(text, h=3):
     malbook.output(f'<b><hr /></b><h{h}>{text}:</h{h}>')
 
 
-# Outputs an HTML list, hiding contents if there are more than
-# hide number of elements
 def _ul(lis, n, hide=10):
     if n == 0:
-        malbook.output('<p><b>NONE</b></p>')
+        malbook.output('<p><b>None</b></p>')
     elif n <= hide:
         malbook.output(f'<p><ul>{lis}</ul></p>')
     else:
