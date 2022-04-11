@@ -280,7 +280,7 @@ def _bazaar(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
         else:
             inner = ''
             for sample in response['data']:
-                link = f'https://bazaar.abuse.ch/sample{sample["sha256_hash"]}'
+                link = f'https://bazaar.abuse.ch/sample/{sample["sha256_hash"]}'
                 inner += f'<li><a href="{link}">{sample["file_name"]}</a></li>'
             lis += f'''<li>These samples from Malware Bazaar had matching imphash:
                     <ul>
@@ -312,7 +312,7 @@ def _bazaar(data: bytes, pe: pefile.PE, config: Config, cache: _Cache):
         else:
             inner = ''
             for sample in response['data']:
-                link = f'https://bazaar.abuse.ch/sample{sample["sha256_hash"]}'
+                link = f'https://bazaar.abuse.ch/sample/{sample["sha256_hash"]}'
                 inner += f'<li><a href="{link}">{sample["file_name"]}</a></li>'
             lis += f'''<li>These samples from Malware Bazaar had matching TLSH:
                     <ul>
