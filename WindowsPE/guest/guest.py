@@ -20,7 +20,6 @@ if not path.exists(LOGS_PATH):
     os.mkdir(LOGS_PATH)
 
 FATAL_ERROR = None
-TIMEOUT = 10
 
 if not path.exists(PROCMON_PATH):
     FATAL_ERROR = f'Procmon executable not found in {PROCMON_PATH}'
@@ -45,7 +44,7 @@ def json_reply_error(err, reply = {}):
     return json.dumps(reply)
 
 
-def generate_log(sample_path, log_path):
+def trace(sample_path, log_path, timeout):
     # NOTE: Weird code below works around the fact that Procmon
     # is a stupid, buggy, inconsistent piece of crap utility maintained
     # by the world's largest, richest software company.
@@ -58,7 +57,7 @@ def generate_log(sample_path, log_path):
     sub.Popen([PROCMON_PATH, '/AcceptEula', '/Minimized', '/Quiet', '/BackingFile', log_path])
     sample_proc = sub.Popen([sample_path])
     pid = sample_proc.pid
-    time.sleep(TIMEOUT)
+    time.sleep(timeout)
     sample_proc.kill()
     time.sleep(1)
     sub.Popen([PROCMON_PATH, '/AcceptEula', '/Terminate'])
@@ -83,6 +82,7 @@ def submit():
 
     req = request.get_json()
     sha256 = req['sha256']
+    timeout = req['timeout']
     sample_path = path.join(SAMPLES_PATH, sha256)
     if not path.exists(sample_path):
         sample = bytes(req['sample'])
@@ -90,7 +90,7 @@ def submit():
             f.write(sample)
 
     log_path = path.join(LOGS_PATH, sha256)
-    log_gen = Process(target=generate_log, args=(sample_path, log_path))
+    log_gen = Process(target=trace, args=(sample_path, log_path, timeout))
     log_gen.run()
 
     return json_reply_ok()

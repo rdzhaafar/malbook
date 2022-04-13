@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from pathlib import Path
 
 import html
@@ -13,8 +13,6 @@ import functools
 import io
 import subprocess as sub
 import time
-import random
-import string
 import platform
 
 import malbook
@@ -84,15 +82,15 @@ class _Cache:
         self._cache['common'][key] = value
 
 
-class Config:
+class ScanConfig:
     hashes: List[str] = ['md5', 'sha1', 'sha256', 'imphash', 'spamsum', 'tlsh']
 
-    malware_bazaar: bool = True
+    malware_bazaar_lookup: bool = True
 
     virustotal_api_key: Optional[str] = None
     virustotal_analysis_timeout: int = 30
 
-    output_path: Path = path.join(os.getcwd(), 'output')
+    output_path: Path = path.join(os.getcwd(), 'pe_sample_output')
 
     unzip: bool = True
     unzip_password: Optional[bytes] = b'infected'
@@ -115,15 +113,16 @@ class Config:
     imports_malapi: bool = True
 
     procmon_vm: Optional[str] = None
-    procmon_connection_attempts: int = 20
+    procmon_vm_connection_attempts: int = 20
+    procmon_trace_timeout: int = 20
 
     compare_to: List[Path] = []
 
-    cache: bool = True
+    cache_results: bool = True
 
 
-def scan(sample: Path, config: Config) -> None:
-    if config.cache:
+def scan(sample: Path, config: ScanConfig) -> None:
+    if config.cache_results:
         cache_path = path.join(config.output_path, 'cache.json')
         cache = _Cache(cache_path)
     else:
@@ -133,32 +132,18 @@ def scan(sample: Path, config: Config) -> None:
         os.mkdir(config.output_path)
     # XXX: Spin up the virtual machine as early as possible
     vm = None
+
     if config.procmon_vm is not None:
-        try:
-            vm = _VirtualMachine(
-                config.procmon_vm_name,
-                connection_attempts=config.procmon_connection_attempts
-            )
-        except Exception as e:
-            print('error: ' + str(e))
-            return
+        vm = _VirtualMachine(config.procmon_vm, config.procmon_vm_connection_attempts)
 
-    try:
-        if config.unzip:
-            unzipped = _unzip(sample, config)
-            for s in os.listdir(unzipped):
-                sample_path = path.join(unzipped, s)
-                _scan(sample_path, config, cache, vm)
-        else:
-            _scan(sample, config, cache, vm)
-    except Exception as e:
-        print('error: ' + str(e))
+    if config.unzip:
+        unzipped = _unzip(sample, config)
+        for s in os.listdir(unzipped):
+            sample_path = path.join(unzipped, s)
+            _scan(sample_path, config, cache, vm)
+    else:
+        _scan(sample, config, cache, vm)
 
-    if vm is not None:
-        try:
-            vm.shutdown()
-        except Exception as e:
-            print('error: ' + str(e))
     cache.save()
 
 
@@ -169,7 +154,7 @@ def _scan(sample, config, cache, vm):
     pe = _pe(data)
     _checksums(data, pe, config, cache)
 
-    if config.malware_bazaar:
+    if config.malware_bazaar_lookup:
         _bazaar(cache)
     if config.virustotal_api_key is not None:
         _virustotal(data, config, cache)
@@ -183,15 +168,13 @@ def _scan(sample, config, cache, vm):
         _imports(pe, config, cache)
     if len(config.compare_to) != 0:
         _compare(data, config, cache)
-    if config.procmon_vm is not None:
-        _procmon(data, cache, vm)
+    if vm is not None:
+        _procmon(data, cache, vm, config)
 
 
 def _virustotal(data, config, cache):
     virustotal_response = cache.get('virustotal_response')
     if virustotal_response is None:
-        if config.virustotal_api_key is None:
-            raise malbook.Error('Need a valid VirusTotal API key')
         def check(resp: req.Response):
             if resp.ok:
                 return
@@ -255,7 +238,7 @@ def _bazaar(cache):
             raise malbook.Error("Can't access Malware Bazaar")
         return response.json()
 
-    out = ''
+    lis = ''
     sha256 = cache.get('sha256')
     tlsh_ = cache.get('tlsh')
     imphash = cache.get('imphash')
@@ -268,9 +251,9 @@ def _bazaar(cache):
         })
         cache.set('sha256_malwarebazaar_response', resp)
     if resp['query_status'] == 'hash_not_found':
-        out += '<li>No sample with this sha256 found</li>'
+        lis += '<li>No sample with this sha256 found</li>'
     else:
-        out += f'<li><a href="https://bazaar.abuse.ch/sample/{sha256}">Sample page</a>'
+        lis += f'<li><a href="https://bazaar.abuse.ch/sample/{sha256}">Sample page</a></li>'
 
     if imphash is not None:
         resp = cache.get('imphash_malwarebazaar_response')
@@ -282,11 +265,11 @@ def _bazaar(cache):
             })
             cache.set('imphash_malwarebazaar_response', resp)
         if resp['query_status'] == 'no_results':
-            out += '<li>No samples with matching imphash found</li>'
+            lis += '<li>No samples with matching imphash found</li>'
         else:
             n = len(resp['data'])
             link = f'https://bazaar.abuse.ch/browse.php?search=imphash:{imphash}'
-            out += f'<li><a href="{link}">{n} samples</a> with matching imphash</li>'
+            lis += f'<li><a href="{link}">{n} samples</a> with matching imphash</li>'
 
     if tlsh_ is not None:
         resp = cache.get('tlsh_malwarebazaar_response')
@@ -303,14 +286,14 @@ def _bazaar(cache):
             })
             cache.set('tlsh_malwarebazaar_response', resp)
         if resp['query_status'] == 'no_results':
-            out += '<li>No samples with matching tlsh found</li>'
+            lis += '<li>No samples with matching tlsh found</li>'
         else:
             n = len(resp['data'])
             link = f'https://bazaar.abuse.ch/browse.php?search=tlsh:{tlsh_}'
-            out += f'<li><a href="{link}">{n} samples</a> with matching tlsh</li>'
+            lis += f'<li><a href="{link}">{n} samples</a> with matching tlsh</li>'
 
     _hdr('Malware Bazaar lookup')
-    malbook.output(out)
+    _ul(lis, 3)
 
 
 def _pe(data):
@@ -550,18 +533,16 @@ def _compare(data, config, cache):
 
 class _VirtualMachine:
 
-    def __init__(self, name, vboxmanage_path='vboxmanage', connection_attempts=30):
-        self.vboxmanage_path = vboxmanage_path
+    def __init__(self, name, connection_attempts):
         self.name = name
         self.connection_attempts = connection_attempts
 
         # Check vboxmanage
-        try:
-            self._cmd(['-v'])
-        except:
-            raise malbook.Error(f'{vboxmanage_path} does not exist. Is VirtualBox installed?')
+        ok, _ = self._cmd(['--version'])
+        if not ok:
+            raise malbook.Error("'vboxmanage' command not found. Is VirtualBox installed?")
 
-        # Check VM config
+        # Check guest OS type
         ok, out = self._cmd(['showvminfo', name, '--machinereadable'])
         if not ok:
             raise malbook.Error(f'Virtual machine "{name}" not found')
@@ -574,82 +555,52 @@ class _VirtualMachine:
             if key == 'GuestOSType' and val != '"Windows10_64"':
                 raise malbook.Error(f'OS "{val}" is not supported')
 
-        # Get IP and set API address
+        # Get guest IP
         ok, out = self._cmd(['guestproperty', 'get', name, '/VirtualBox/GuestInfo/Net/0/V4/IP'])
         if not ok or not out.startswith('Value: '):
-            raise malbook.Error('Virtual machine IPv4 not found')
+            raise malbook.Error('Virtual machine IP address not found. Is it running?')
         ip = out[len('Value: '):-1]
-        api = 'http://' + ip + ':5000'
-        self.api = api
+        url = 'http://' + ip + ':5000'
+        self.url = url
 
-        # run and try to connect
-        self._cmd(['startvm', name, '--type', 'headless'])
-        self._check_connection()
+        # Connect
+        self._req('GET', '/status')
 
-        # Take a base snapshot
-        snapshot = ''.join(random.choice(string.ascii_letters) for _ in range(20))
-        ok, err = self._cmd(['snapshot', name, 'take', snapshot])
-        if not ok:
-            raise malbook.Error(f'Cannot take snapshot: "{err}"')
-        self.snapshot = snapshot
+    def trace(self, config, cache, sample_bytes):
+        sha256 = cache.get('sha256')
+        resp = self._req('POST', '/submit', {
+            'sample': list(sample_bytes),
+            'sha256': sha256,
+            'timeout': config.procmon_trace_timeout,
+        })
+        time.sleep(config.procmon_trace_timeout)
+        resp = self._req('GET', '/get_log', {'sha256': sha256})
+        pml_file = path.join(config.output_path, sha256 + '.pml')
+        with open(pml_file, 'wb') as f:
+            f.write(bytes(resp['log']))
 
-    def restore(self):
-        ok, err = self._cmd(['controlvm', self.name, 'poweroff'])
-        if not ok:
-            raise malbook.Error(f'Cannot shutdown virtual machine: {err}')
-        ok, err = self._cmd(['snapshot', self.name, 'restore', self.snapshot])
-        if not ok:
-            raise malbook.Error(f'Cannot restore snapshot: {err}')
-        ok, err = self._cmd(['startvm', self.name, '--type', 'headless'])
-        if not ok:
-            raise malbook.Error(f'Cannot start the virtual machine: {err}')
-        self._check_connection()
+        cache.set('pml_file', pml_file)
+        cache.set('sample_pid', resp['pid'])
 
-    def shutdown(self):
-        self.restore()
-        self._cmd(['snapshot', self.name, 'delete', self.snapshot])
-        self._cmd(['controlvm', self.name, 'poweroff'])
-
-    def _check_connection(self):
-        resp = self._req('GET', '/status')
+    def _req(self, method, endpoint, data=None):
+        resp = None
+        for _ in range(self.connection_attempts):
+            try:
+                url = self.url + endpoint
+                resp = req.request(method, url, json=data, timeout=(1.0, 180))
+                break
+            except:
+                time.sleep(1)
         if resp is None:
-            raise malbook.Error(f'Cannot connect to virtual machine at {self.api}')
+            raise malbook.Error(f"Can't connect to the virtual machine at '{self.url}'")
         resp = resp.json()
         if resp['status'] != 'ok':
             err = resp['error']
             raise malbook.Error(f'Virtual machine error: {err}')
+        return resp
 
-    def analyze(self, sample_bytes, sample_sha256):
-        request = {
-            'sample': list(sample_bytes),
-            'sha256': sample_sha256,
-        }
-        resp = self._req('POST', '/submit', request)
-        if resp.json()['status'] != 'ok':
-            raise malbook.Error(f'Cannot submit sample {sample_sha256} to the virtual machine.\n{resp.json()["error"]}')
-        # XXX: This timeout is hardcoded in the guest server
-        time.sleep(10)
-        resp = self._req('GET', '/get_log', request)
-        # XXX: This response is very large, since it contains the whole binary log.
-        # De-serialize it once only.
-        resp = resp.json()
-        if resp['status'] != 'ok':
-            raise malbook.Error(f'Error getting the log back from the virtual machine.\n{resp["error"]}')
-
-        self.restore()
-        return bytes(resp['log']), resp['pid']
-
-    def _req(self, method, endpoint, data=None):
-        for _ in range(self.connection_attempts):
-            try:
-                resp = req.request(method, self.api + endpoint, json=data)
-                return resp
-            except:
-                time.sleep(1)
-        return None
-
-    def _cmd(self, cmd: List[str]) -> Tuple[bool, str]:
-        full = [self.vboxmanage_path]
+    def _cmd(self, cmd):
+        full = ['vboxmanage']
         full.extend(cmd)
         out = sub.run(full, capture_output=True)
         if out.returncode == 0:
@@ -658,35 +609,40 @@ class _VirtualMachine:
             return False, out.stderr.decode('utf-8')
 
 
-def _procmon(data, cache, vm):
-    events = cache.get('procmon_events')
-    n = cache.get('procmon_events_n') or 0
-    sha256 = cache.get('sha256')
+def _procmon(data, cache, vm, config):
+    pml_file = cache.get('pml_file')
+    sample_pid = cache.get('sample_pid')
     err = None
-    try:
-        logbytes, pid = vm.analyze(data, sha256)
-        log = io.BytesIO(logbytes)
-        reader = procmon_parser.ProcmonLogsReader(log)
-        events = ''
-        for event in reader:
-            if event.process.pid == pid:
-                events += f'<li>{_hesc(event.__str__())}</li>'
-                n += 1
-        cache.set('procmon_events', events)
-        cache.set('procmon_events_n', n)
-    except malbook.Error as e:
-        err = f'Virtual machine error: {e}'
-        vm.restore()
-    except procmon_parser.PMLError:
-        err = 'Procmon log file is corrupt'
-
+    if pml_file is None:
+        try:
+            vm.trace(config, cache, data)
+            pml_file = cache.get('pml_file')
+            sample_pid = cache.get('sample_pid')
+        except Exception as e:
+            err = str(e)
     if err is not None:
-        malbook.output('<h3>An error occurred while capturing events with Process Monitor</h3>')
-        malbook.output(f'<p>{err}</p>')
-        _ul(f'<li>{err}</li>', 1)
-    else:
-        _hdr('Events captured by Process Monitor')
-        _ul(events, n)
+        malbook.output(f"<h3>Couldn't trace sample: {err}</h3>")
+        return
+
+    # XXX: Sometimes a ransomware corrupts the log file before it's transited
+    # to the host
+    try:
+        pml_fd = open(pml_file, 'rb')
+        reader = procmon_parser.ProcmonLogsReader(pml_fd)
+        lis = ''
+        n = 0
+        for event in reader:
+            if event.process.pid == sample_pid:
+                lis += f'<li>{_hesc(str(event))}</li>'
+                n += 1
+        pml_fd.close()
+    except procmon_parser.PMLError:
+        pml_fd.close()
+        malbook.output('<h3>Process Monitor log file is corrupt</h3>')
+        return
+
+    _hdr('Events recorded by Process Monitor')
+    _ul(lis, n)
 
 
 def _csum(algorithm, data):
@@ -700,7 +656,7 @@ def _hesc(text):
 
 
 def _hdr(text, h=3):
-    malbook.output(f'<b><hr /></b><h{h}>{text}:</h{h}>')
+    malbook.output(f'<h{h}>{text}:</h{h}>')
 
 
 def _ul(lis, n, hide=10):
@@ -713,7 +669,7 @@ def _ul(lis, n, hide=10):
         <p>
             <details>
                 <summary>
-                    Click here to show all <b>{n}</b>
+                    Click here to show all {n}
                 </summary>
                 <ul>
                     {lis}
