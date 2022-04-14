@@ -1,5 +1,0 @@
-# Package build files
-dist
-src/malbook.egg-info
-build
-test

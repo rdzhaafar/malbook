@@ -1,5 +1,7 @@
 .DS_Store
 .vscode
 venv
-Example
-Presentation/Images
+dist
+src/malbook.egg-info
+build
+test
