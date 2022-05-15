@@ -1,7 +1,7 @@
 ## About
 
-malbook is a utility that aims to make it easy to create and reuse Jupyter
-notebooks.
+Malbook is a utility for creating malware analysis templates. It manages all Python dependencies
+and provides a convenient analysis task API that features automatic task order resolution.
 
 ## Installation
 
@@ -12,31 +12,18 @@ $ pip install malbook
 
 ## Quickstart
 
-Let's create a Jupyter notebook that will print the import
-table of the [FLOSS](https://github.com/mandiant/flare-floss) Windows executable. First, create a new
-notebook
+We will create a template that prints dynamic imports of a Windows executable. First,
+create an empty folder and tell malbook to treat it as a template
 
-```shell
+```sh
 $ mkdir demo
 $ cd demo
 $ malbook new
-```
-
-You can now launch the freshly created notebook
-
-```sh
 $ malbook run
 ```
 
-Let's now download and unzip the FLOSS executable
-
-```sh
-$ wget https://github.com/mandiant/flare-floss/releases/download/v1.7.0/floss-v1.7.0-windows.zip
-$ unzip floss-v1.7.0-windows.zip
-$ rm floss-v1.7.0-windows.zip
-```
-
-We will extract the import table using [pefile](https://github.com/erocarrera/pefile). Since this package is not installed by default, we will use a special utility function to
+We will extract the dynamic import table using [pefile](https://github.com/erocarrera/pefile). 
+Since this package is not part of the Python standard library, we will use a special utility function to
 import it into the script
 
 ```python
@@ -44,8 +31,8 @@ import malbook
 pefile = malbook.safe_import('pefile')
 ```
 
-`safe_import()` will ensure that package gets installed before the module is imported.
-We can now print FLOSS's import table using with this snippet
+`safe_import()` will ensure that `pefile` gets installed before it is imported.
+In this example, we analyze [FLOSS](https://github.com/mandiant/flare-floss).
 
 ```python
 pe = pefile.PE('floss.exe')
@@ -57,26 +44,24 @@ for entry in pe.DIRECTORY_ENTRY_IMPORT:
 
 ![](./images/demo.png)
 
-After we make sure that our script works, we can distribute it to other people.
-This is done by creating a malbook template, which encompasses all the files inside
-the folder along with all the dependencies needed by the script.
+After we make sure that our template works, we can distribute it to other people.
+Tell malbook to package our template for distribution
 
-```shell
+```sh
 $ malbook template create demo.zip
 ```
 
-which will create a file `Demo.zip`, which can be shared with others.
-Loading the template is done like so:
+The file `demo.zip` can now be shared with others. Anyone who wants to use this template
+can extract it with using malbook
 
-```shell
+```sh
 $ malbook template load demo.zip loaded
 ```
 
-When the template is loaded, the notebook can be launched right away.
-It will contain all necessary dependencies, so you don't have to worry about
-having to tell people to `pip install -r requirements.txt`
+This command extracts the template and installs any required dependencies.
+When template is loaded, it can be launched right away
 
-```shell
+```sh
 $ cd loaded
 $ malbook run
 ```
